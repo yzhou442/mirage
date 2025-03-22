@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      - ci
+  workflow_dispatch:
 
 concurrency:
   group: build-${{ github.head_ref || github.run_id }}
@@ -33,40 +33,21 @@ jobs:
           use-github-cache: "false"
 
       - name: Install Dependencies
+        run: .github/workflows/helpers/install_dependencies.sh
+
+      - name: Check Z3 Library Path
         run: |
-          sudo apt update
-          sudo apt install -y software-properties-common lsb-release wget python3-pip g++ make libboost-all-dev
-
-          CMAKE_VERSION=3.27.0
-          wget -O cmake.sh https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh
-          sudo mkdir -p /opt/cmake && sudo sh cmake.sh --skip-license --prefix=/opt/cmake
-          sudo ln -sf /opt/cmake/bin/cmake /usr/local/bin/cmake
-
-          pip3 install --upgrade cython
-
-          # Install cuDNN 9
-          UBUNTU_VERSION=$(lsb_release -rs | tr -d '.')
-          wget -c -q "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt update -y
-          rm -f cuda-keyring_1.1-1_all.deb
-          sudo apt-get install -y libcudnn9-cuda-12 libcudnn9-dev-cuda-12 libcudnn9-samples
-          sudo ldconfig
-
-      - name: Build Z3 from Source
-        run: |
-          export MIRAGE_ROOT=${{ github.workspace }}
-          cd $MIRAGE_ROOT/deps/z3
-          mkdir -p build && cd build
-          cmake ..
-          make -j$(nproc)
-          echo "Z3_DIR=$MIRAGE_ROOT/deps/z3/build" >> $GITHUB_ENV
-
+          find /usr -name "libz3.so*" || true
+          ldd $(find /usr/lib -name "*z3*.so*" | head -1) || true
+          
       - name: Build Mirage from Source
+        env:
+          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+        run: .github/workflows/helpers/build_mirage_from_source.sh
+      
+      - name: Test Mirage Import
         run: |
-          export MIRAGE_ROOT=${{ github.workspace }}
-          cd $MIRAGE_ROOT
-          mkdir -p build && cd build
-          cmake ..
-          make -j$(nproc)
-          sudo make install
+          # Set LD_LIBRARY_PATH for Z3
+          export LD_LIBRARY_PATH="/usr/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}"
+          python -c "import mirage; print('Mirage import successful!')"
