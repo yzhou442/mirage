@@ -110,7 +110,8 @@ cdef extern from "mirage/type.h" namespace "mirage::type":
         TB_ADD_OP = 2200,
         TB_MUL_OP = 2201,
         TB_DIV_OP = 2202,
-        TB_POW_OP = 2203,
+        TB_SUB_OP = 2203,
+        TB_POW_OP = 2204,
         # Reduction and Normalization
         TB_REDUCTION_FIRST_OP_ID = 2300,
         TB_REDUCTION_0_OP = 2301,
@@ -119,6 +120,9 @@ cdef extern from "mirage/type.h" namespace "mirage::type":
         TB_REDUCTION_0_TO_DIMX_OP = 2304,
         TB_REDUCTION_1_TO_DIMX_OP = 2305,
         TB_REDUCTION_2_TO_DIMX_OP = 2306,
+        TB_REDUCTION_0_MAX_OP = 2307,
+        TB_REDUCTION_1_MAX_OP = 2308,
+        TB_REDUCTION_2_MAX_OP = 2309,
         TB_REDUCTION_LAST_OP_ID = 2349,
         TB_RMS_NORM_OP = 2350,
         # Concat
@@ -141,6 +145,9 @@ cdef extern from "mirage/type.h" namespace "mirage::type":
         TB_FORLOOP_ACCUM_RED_LD_MEAN_OP = 2502,
         TB_FORLOOP_ACCUM_RED_LD_RMS_OP = 2503,
         TB_FORLOOP_ACCUM_REDTOX_LD_SUM_OP = 2504,
+        TB_FORLOOP_ACCUM_NO_RED_RESCALE_OP = 2505,
+        TB_FORLOOP_ACCUM_RED_LD_SUM_RESCALE_OP = 2506,
+        TB_FORLOOP_ACCUM_MAX_OP = 2507,
         TB_FORLOOP_ACCUM_LAST_OP = 2599,
         TB_CUSTOMIZED_OP = 2999
 
@@ -263,19 +270,27 @@ cdef extern from "mirage/threadblock/graph.h" namespace "mirage::threadblock":
         CppSTensor* clamp(const CppSTensor *A, float min_val, float max_val)
         CppSTensor* square(const CppSTensor *A)
         CppSTensor* sqrt(const CppSTensor *A)
+        CppSTensor* mul_scalar(const CppSTensor *A, float scalar)
         CppSTensor* add(const CppSTensor *A,
                      const CppSTensor *B)
         CppSTensor* mul(const CppSTensor *A,
                      const CppSTensor *B)
         CppSTensor* div(const CppSTensor *A,
                      const CppSTensor *B)
+        CppSTensor* sub(const CppSTensor *A,
+                     const CppSTensor *B)
         CppSTensor* reduction(const CppSTensor *A, int dim)
+        vector[CppSTensor*] reduction_max(const CppSTensor *A, int dim)
         CppSTensor* rms_norm(const CppSTensor *A)
         CppSTensor* concat(const CppSTensor *A,
                         const CppSTensor *B,
                         int dim)
         CppSTensor* forloop_accum(const CppSTensor *A,
                                TBOperatorType optype)
+        CppSTensor* forloop_accum_rescale(const CppSTensor *A,
+                               const CppSTensor *B,
+                               TBOperatorType optype)
+        CppSTensor* forloop_accum_max(const CppSTensor *A)
         dim3 grid_dim
         dim3 block_dim
         int forloop_range
@@ -316,6 +331,7 @@ cdef extern from "mirage/transpiler/transpile.h" namespace "mirage::transpiler":
         int num_producer_wgs;
         int pipeline_stages;
         bool profiling;
+        bool enable_online_softmax;
     ctypedef struct OutputTensorDirective:
         size_t alloc_size
         vector[int] shape
