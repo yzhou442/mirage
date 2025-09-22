@@ -271,41 +271,41 @@ __device__ __forceinline__ void
           input_weight_smem.set_ptr(shared_weight +
             slot * OUTPUT_ATOM_SIZE * TILE_SIZE);
 
-          constexpr int CHUNK_SIZE = 16 / sizeof(T);
-          constexpr int NUM_CHUNKS_B = TILE_SIZE * OUTPUT_ATOM_SIZE;
-          constexpr int CHUNKS_PER_COL_B = TILE_SIZE;
-          #pragma unroll
-            for (int elem_idx = threadIdx.x - 128; elem_idx < OUTPUT_ATOM_SIZE * TILE_SIZE; elem_idx += NUM_THREADS) {
-              int row = elem_idx / (TILE_SIZE);
-              int col = elem_idx % (TILE_SIZE);
+          // constexpr int CHUNK_SIZE = 16 / sizeof(T);
+          // constexpr int NUM_CHUNKS_B = TILE_SIZE * OUTPUT_ATOM_SIZE;
+          // constexpr int CHUNKS_PER_COL_B = TILE_SIZE;
+          // #pragma unroll
+          //   for (int elem_idx = threadIdx.x - 128; elem_idx < OUTPUT_ATOM_SIZE * TILE_SIZE; elem_idx += NUM_THREADS) {
+          //     int row = elem_idx / (TILE_SIZE);
+          //     int col = elem_idx % (TILE_SIZE);
               
-              // load_smem(input_weight_smem(row, col), weight_dmem(row + output_atom_idx * OUTPUT_ATOM_SIZE, col));
-              input_weight_smem.at(row, col) = weight_dmem.at(row + output_atom_idx * OUTPUT_ATOM_SIZE, col + i * TILE_SIZE);
-            }
+          //     // load_smem(input_weight_smem(row, col), weight_dmem(row + output_atom_idx * OUTPUT_ATOM_SIZE, col));
+          //     input_weight_smem.at(row, col) = weight_dmem.at(row + output_atom_idx * OUTPUT_ATOM_SIZE, col + i * TILE_SIZE);
+          //   }
   
-            wg_sync<THREADS_PER_WARPGROUP * PRODUCER_WARPGROUPS>(2);
+          //   wg_sync<THREADS_PER_WARPGROUP * PRODUCER_WARPGROUPS>(2);
 
     if (lane_id() == 0 && warp_idx == (NUM_WARPGROUPS * WARPGROUP_WARPS - 4)) {
 
-      arrive(weight_barrier[slot], 1);
+      // arrive(weight_barrier[slot], 1);
           // wait(compute_done[slot], phase ^ 1);
 
           int tma_coords_A[2] = {i * TILE_SIZE,
                                  output_atom_idx * OUTPUT_ATOM_SIZE};
           int tma_coords_B[2] = {i * TILE_SIZE, 0};
 
-          // input_weight_smem.set_ptr(shared_weight +
-          //                           slot * OUTPUT_ATOM_SIZE * TILE_SIZE);
+          input_weight_smem.set_ptr(shared_weight +
+                                    slot * OUTPUT_ATOM_SIZE * TILE_SIZE);
           input_smem.set_ptr(shared_input +
                              slot * SMEM_M_SIZE * TILE_SIZE);
 
-          // set_barrier_transaction_bytes(weight_barrier[slot],
-          //                               TMA_TRANS_BYTES_A);
+          set_barrier_transaction_bytes(weight_barrier[slot],
+                                        TMA_TRANS_BYTES_A);
           set_barrier_transaction_bytes(input_barrier[slot], TMA_TRANS_BYTES_B);
 
 
-          // tma_a.tma_cp_async(
-          //     weight_barrier[slot], input_weight_smem(0, 0), tma_coords_A);
+          tma_a.tma_cp_async(
+              weight_barrier[slot], input_weight_smem(0, 0), tma_coords_A);
           tma_b.tma_cp_async(
               input_barrier[slot], input_smem(0, 0), tma_coords_B);
         }
