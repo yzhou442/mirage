@@ -1206,10 +1206,13 @@ int TaskRegister::register_linear_swapAB_hopper_task(threadblock::Graph const &b
   code.e("    tma_b,");
   code.e("    tma_out, ");
   if (with_residual) {
-    code.e("    &tma_residual");
+    code.e("    &tma_residual,");
   } else {
-    code.e("    nullptr");
+    code.e("    nullptr,");
   }
+  
+  code.e("    task_desc.outputs[0].base_ptr,");
+  code.e("    task_desc.inputs[1].base_ptr");
   code.e(");");
 
   if (with_residual) {
