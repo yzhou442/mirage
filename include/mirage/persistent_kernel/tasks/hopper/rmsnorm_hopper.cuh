@@ -14,13 +14,17 @@
  */
 #pragma once
 #include "../common/utils.cuh"
+#include "utils.cuh"
 namespace kernel {
 
-template <typename T, int BATCH_SIZE, int HIDDEN_DIM, int NUM_THREADS = 256>
+template <typename T, int BATCH_SIZE, int HIDDEN_DIM, int NUM_THREADS = CONSUMER_NUM_THREADS>
 __device__ __forceinline__ void rms_norm_hopper_impl(void const *input_ptr,
                                                      void const *weight_ptr,
                                                      void *output_ptr,
                                                      float eps) {
+  if (threadIdx.x >= CONSUMER_NUM_THREADS) {
+    return;
+  }
   static_assert(BATCH_SIZE == 1);
   extern __shared__ char smem[];
   constexpr int CHUNK_SIZE = 16 / sizeof(T); // 128b copy-async
@@ -78,7 +82,7 @@ __device__ __forceinline__ void rms_norm_hopper_impl(void const *input_ptr,
     } else if (for_idx + 1 == NUM_TILES) {
       cp_async_wait<0>();
     }
-    __syncthreads();
+    wg_sync<CONSUMER_NUM_THREADS>(5);
 #pragma unroll
     for (int i = threadIdx.x; i < TILE_SIZE; i += NUM_THREADS) {
       float val = (float)shared_input_buffer[for_idx * TILE_SIZE + i];
@@ -93,7 +97,7 @@ __device__ __forceinline__ void rms_norm_hopper_impl(void const *input_ptr,
   if (threadIdx.x % 32 == 0) {
     reduce_smem[threadIdx.x / 32] = sum;
   }
-  __syncthreads();
+  wg_sync<CONSUMER_NUM_THREADS>(5);
   sum = threadIdx.x < NUM_WARPS ? reduce_smem[threadIdx.x] : 0.0f;
 #pragma unroll
   for (int offset = NUM_WARPS / 2; offset > 0; offset /= 2) {
@@ -102,7 +106,7 @@ __device__ __forceinline__ void rms_norm_hopper_impl(void const *input_ptr,
   if (threadIdx.x == 0) {
     reduce_smem[0] = sum;
   }
-  __syncthreads();
+  wg_sync<CONSUMER_NUM_THREADS>(5);
 
   float rms_rcp = rsqrt(reduce_smem[0] / float(HIDDEN_DIM) + eps);
 
@@ -113,7 +117,7 @@ __device__ __forceinline__ void rms_norm_hopper_impl(void const *input_ptr,
     val *= rms_rcp * w;
     shared_output_buffer[i] = (T)val;
   }
-  __syncthreads();
+  wg_sync<CONSUMER_NUM_THREADS>(5);
 #pragma unroll
   for (int i = threadIdx.x; i < NUM_CHUNKS_OUTPUT; i += NUM_THREADS) {
     *((__uint128_t *)((void *)&d_output[i * CHUNK_SIZE])) =

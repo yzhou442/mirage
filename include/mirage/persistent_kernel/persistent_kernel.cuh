@@ -28,7 +28,7 @@
 #include <thread>
 #include <unistd.h>
 #include <vector>
-
+#include "tasks/hopper/utils.cuh"
 #if defined(MIRAGE_GRACE_HOPPER)
 #include "tasks/hopper/task_header.cuh"
 #elif defined(MIRAGE_GRACE_BLACKWELL)
@@ -954,7 +954,7 @@ __device__ __forceinline__ void execute_scheduler(RuntimeConfig config,
 }
 
 __global__ __launch_bounds__(WORKER_NUM_THREADS,
-                             1) void persistent_kernel(RuntimeConfig config) {
+                             2) void persistent_kernel(RuntimeConfig config) {
   persistent_checker(config);
   if (blockIdx.x < config.num_workers) {
     execute_worker(config);
@@ -965,6 +965,11 @@ __global__ __launch_bounds__(WORKER_NUM_THREADS,
 
 __global__ __launch_bounds__(WORKER_NUM_THREADS,
                              1) void worker_kernel(RuntimeConfig config) {
+  // if (threadIdx.x < 128) {
+  //   wg_increase_regs<256>();
+  // } else {
+  //   wg_decrease_regs<160>();
+  // }
   worker_checker(config);
   execute_worker(config);
 }

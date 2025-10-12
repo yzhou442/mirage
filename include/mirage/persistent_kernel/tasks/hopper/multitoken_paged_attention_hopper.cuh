@@ -68,6 +68,7 @@ __device__ __forceinline__ void multitoken_paged_attention_hopper_impl(
     float q_eps,
     float k_eps,
     void *output_ptr,
+    void *qkv_ptr,
     int head_group) {
   constexpr int NUM_QO_PER_KV = NUM_QO_HEADS / NUM_KV_HEADS;
 

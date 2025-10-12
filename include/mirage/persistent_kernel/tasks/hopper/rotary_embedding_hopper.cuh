@@ -29,6 +29,9 @@ __device__ __forceinline__ void rotary_embedding_hopper(InputSmem smem_input,
                                                         T const *cos_ptr,
                                                         T const *sin_ptr,
                                                         int token_offset = 0) {
+  if (threadIdx.x >= CONSUMER_NUM_THREADS) {
+    return;
+  }
 #pragma unroll
   for (int win_idx = 0; win_idx < WINDOW_SIZE; ++win_idx) {
 
