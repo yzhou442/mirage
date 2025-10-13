@@ -25,10 +25,10 @@
 #include <nvshmem.h>
 #include <nvshmemx.h>
 #endif
+#include "tasks/hopper/utils.cuh"
 #include <thread>
 #include <unistd.h>
 #include <vector>
-#include "tasks/hopper/utils.cuh"
 #if defined(MIRAGE_GRACE_HOPPER)
 #include "tasks/hopper/task_header.cuh"
 #elif defined(MIRAGE_GRACE_BLACKWELL)

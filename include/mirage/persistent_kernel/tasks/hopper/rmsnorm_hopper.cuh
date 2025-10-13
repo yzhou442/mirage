@@ -17,7 +17,10 @@
 #include "utils.cuh"
 namespace kernel {
 
-template <typename T, int BATCH_SIZE, int HIDDEN_DIM, int NUM_THREADS = CONSUMER_NUM_THREADS>
+template <typename T,
+          int BATCH_SIZE,
+          int HIDDEN_DIM,
+          int NUM_THREADS = CONSUMER_NUM_THREADS>
 __device__ __forceinline__ void rms_norm_hopper_impl(void const *input_ptr,
                                                      void const *weight_ptr,
                                                      void *output_ptr,
