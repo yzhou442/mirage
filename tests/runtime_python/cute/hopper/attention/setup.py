@@ -20,18 +20,18 @@ cuda_library_dirs = [
 ]
 
 setup(
-    name='runtime_kernel_cute_hopper',
+    name='runtime_kernel_cute_hopper_attention',
     ext_modules=[
         CUDAExtension(
-            name='runtime_kernel_cute_hopper',
+            name='runtime_kernel_cute_hopper_attention',
             sources=[
-                os.path.join(this_dir, 'gemm.cu'),
+                os.path.join(this_dir, 'attention.cu'),
             ],
             include_dirs=[
-                os.path.join(this_dir, '../../../../include/mirage/persistent_kernel/tasks/cute/hopper'),
-                os.path.join(this_dir, '../../../../include'),
-                os.path.join(this_dir, '../../../../deps/cutlass/include'),
-                os.path.join(this_dir, '../../../../deps/cutlass/tools/util/include'),
+                os.path.join(this_dir, '../../../../../include/mirage/persistent_kernel/tasks/cute/hopper/attention'),
+                os.path.join(this_dir, '../../../../../include'),
+                os.path.join(this_dir, '../../../../../deps/cutlass/include'),
+                os.path.join(this_dir, '../../../../../deps/cutlass/tools/util/include'),
             ],
             libraries=["cuda"],
             library_dirs=cuda_library_dirs,
