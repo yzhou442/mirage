@@ -23,7 +23,7 @@
 #include "cutlass/cutlass.h"
 
 namespace kernel {
-
+namespace flashinfer {
 // Enumerates the reserved named barriers to avoid potential conflicts
 
 enum class NamedBarriers {
@@ -125,7 +125,7 @@ struct WarpScheduler {
   }
 
 }; // struct WarpScheduler
-
+} // namespace flashinfer
 } // namespace kernel
 
 #endif // FLASHINFER_ATTENTION_HOPPER_NAMED_BARRIERS_CUH_

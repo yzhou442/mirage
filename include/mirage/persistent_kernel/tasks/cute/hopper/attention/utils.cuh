@@ -42,7 +42,7 @@
 #include "cutlass/fast_math.h"
 
 namespace kernel {
-
+namespace flashinfer {
 using namespace cute;
 
 // Type traits to detect members in AdditionalParams
@@ -661,10 +661,11 @@ __forceinline__ __device__ void gemm(TiledMma &tiled_mma,
    template <typename T>                                                                        \
    inline constexpr bool has_##member##_v = has_##member<T>::value;
  
- }  // namespace flashinfer
+ } 
  
  #endif  // FLASHINFER_UTILS_CUH_
 
+} // namespace flashinfer
 } // namespace kernel
 
 #endif // FLASHINFER_ATTENTION_HOPPER_UTILS_CUH_

@@ -24,7 +24,7 @@
 #include <cutlass/numeric_types.h>
 
 namespace kernel {
-
+namespace flashinfer {
 template <typename Ktraits,
           bool LEFT_SLIDING_WINDOW,
           bool CAUSAL,
@@ -410,6 +410,7 @@ CUTLASS_DEVICE void mma_f16(Params const &mainloop_params,
   attention_updater.rescale_o(tOrO);
   return;
 }
+} // namespace flashinfer
 
 } // namespace kernel
 

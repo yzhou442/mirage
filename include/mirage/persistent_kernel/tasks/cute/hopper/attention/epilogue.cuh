@@ -27,7 +27,7 @@
 #include "utils.cuh"
 
 namespace kernel {
-
+namespace flashinfer {
 using namespace cute;
 
 template <int NUM_COPY_THREADS,
@@ -357,7 +357,8 @@ struct CollectiveEpilogue {
       }
     }
   }
-};
+  };
+}  // namespace flashinfer
 
 } // namespace kernel
 

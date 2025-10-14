@@ -39,6 +39,7 @@
 #include "utils.cuh"
 
 namespace kernel {
+namespace flashinfer {
 
 template <typename CollectiveMainloop,
           typename CollectiveEpilogue,
@@ -390,4 +391,5 @@ enum class MaskMode {
   kMultiItemScoring = 3U,
 };
 
+} // namespace flashinfer
 } // namespace kernel

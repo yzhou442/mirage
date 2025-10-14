@@ -30,7 +30,7 @@
 #include "cutlass/pipeline/pipeline.hpp"
 
 namespace kernel {
-
+namespace flashinfer {
 using namespace cute;
 
 template <typename MainloopPipeline,
@@ -178,7 +178,7 @@ struct AttentionKernelTraits {
                                           SmemLayoutV,
                                           SmemLayoutO>;
 };
-
+}  // namespace flashinfer
 } // namespace kernel
 
 #endif // FLASHINFER_ATTENTION_HOPPER_KERNEL_TRAITS_CUH_

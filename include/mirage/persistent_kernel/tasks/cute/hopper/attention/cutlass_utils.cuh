@@ -48,7 +48,7 @@
  #endif
  
  namespace kernel {
- 
+ namespace flashinfer {
  template <typename T>
  struct cutlass_dtype {
    using type = T;
@@ -105,7 +105,7 @@
        FLASHINFER_ERROR(err_msg.str());                                                \
      }                                                                                 \
    } while (0)
- 
+ }  // namespace flashinfer
  }  // namespace kernel
  
  #endif  // FLASHINFER_CUTLASS_UTILS_CUH_

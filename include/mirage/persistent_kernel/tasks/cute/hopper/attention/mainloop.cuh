@@ -31,7 +31,7 @@
 #include "utils.cuh"
 
 namespace kernel {
-
+namespace flashinfer {
 using namespace cute;
 
 template <typename AdditionalParams, typename Ktraits, bool CAUSAL>
@@ -356,6 +356,7 @@ struct CollectiveMainloop {
     }
   }
 };
+} // namespace flashinfer
 
 } // namespace kernel
 

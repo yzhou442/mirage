@@ -23,7 +23,7 @@
 #include "named_barrier.cuh"
 
 namespace kernel {
-
+namespace flashinfer {
 struct SingleTileScheduler {
 public:
   // Host side kernel arguments
@@ -373,6 +373,7 @@ public:
   }
 };
 
+} // namespace flashinfer
 } // namespace kernel
 
 #endif // FLASHINFER_ATTENTION_HOPPER_TILE_SCHEDULER_CUH_

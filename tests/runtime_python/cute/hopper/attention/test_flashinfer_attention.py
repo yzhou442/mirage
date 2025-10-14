@@ -180,7 +180,11 @@ eps = 1e-5
 
 mirage_output = torch.empty(max_tokens * qo_heads, head_dim, device=device, dtype=dtype)
 
-runtime_kernel.multitoken_paged_attention(
+
+qo_lens = torch.tensor([num_tokens], device=device, dtype=torch.int32)
+kv_lens = torch.tensor([prompt_len + num_tokens], device=device, dtype=torch.int32)
+
+runtime_kernel.multitoken_paged_attention_hopper_v2(
     mirage_qkv,
     paged_k_cache,
     paged_v_cache,
@@ -189,9 +193,14 @@ runtime_kernel.multitoken_paged_attention(
     paged_kv_indptr_buffer,
     paged_kv_indices_buffer,
     paged_kv_last_page_len_buffer,
-    0,
-    True,
-    True,
+    qo_lens,                         # new：query lengths
+    kv_lens,                         # new：kv lengths
+    0,                               # request_id
+    True,                            # qk_norm
+    True,                            # rope
+    1,                               # mask_mode_code (1=Causal)
+    -1,                              # window_left
+    False,                           # enable_pdl
     q_norm_weight,
     k_norm_weight,
     all_cos,

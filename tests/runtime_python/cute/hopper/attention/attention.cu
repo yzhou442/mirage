@@ -9,21 +9,30 @@
 #include "mainloop_mma.cuh"
 #include "tile_scheduler.cuh"
 #include "utils.cuh"
+#include "variants.cuh"
+#include "variant_helper.cuh"
+
 #include "../../../../../include/mirage/persistent_kernel/tasks/hopper/tma_3d.cuh"
 #include "../../../../../include/mirage/persistent_kernel/tasks/hopper/tma_2d.cuh"
 
 using namespace cute;
 using namespace cutlass;
+using namespace kernel::tma;
 using bfloat16 = cutlass::bfloat16_t;
-using kernel::MaskMode;
-using kernel::AttentionKernelTraits;
-using kernel::PrefillWithKVCacheKernel;
-using kernel::BatchPrefillTileScheduler;
-using kernel::BatchPrefillPersistentTileScheduler;
-using kernel::CollectiveEpilogue;
-using kernel::CollectiveMainloop;
-using kernel::get_gmem_layout;
-using kernel::get_lse_gmem_layout;
+using kernel::flashinfer::MaskMode;
+using kernel::flashinfer::AttentionKernelTraits;
+using kernel::flashinfer::PrefillWithKVCacheKernel;
+using kernel::flashinfer::BatchPrefillTileScheduler;
+using kernel::flashinfer::BatchPrefillPersistentTileScheduler;
+using kernel::flashinfer::CollectiveEpilogue;
+using kernel::flashinfer::CollectiveMainloop;
+using kernel::flashinfer::get_gmem_layout;
+using kernel::flashinfer::get_lse_gmem_layout;
+using kernel::flashinfer::StandardAttention;
+using kernel::flashinfer::StandardFP8Attention;
+using kernel::flashinfer::LogitsSoftCap;
+using kernel::flashinfer::DefaultAttention;
+using kernel::flashinfer::DefaultFP8Attention;
 
 // Define missing macros
 #ifndef FLASHINFER_CUDA_CALL
@@ -202,7 +211,7 @@ void launch_multitoken_paged_attention_hopper(
   constexpr int TAIL_PAGE_SIZE = prompt_len % PAGE_SIZE;
 
   using TMA_Q =
-      kernel::tma::tma_3d<bfloat16,
+      tma_3d<bfloat16,
                           B,
                           M,
                           S,
@@ -221,7 +230,7 @@ void launch_multitoken_paged_attention_hopper(
                           true>;
 
   using TMA_KV =
-      kernel::tma::tma_3d<bfloat16,
+      tma_3d<bfloat16,
                           B,
                           M,
                           S,
@@ -240,7 +249,7 @@ void launch_multitoken_paged_attention_hopper(
                           true>;
 
   using TMA_PAGED_KV_CACHE =
-      kernel::tma::tma_3d<bfloat16,
+      tma_3d<bfloat16,
                           B,
                           M,
                           S,
@@ -259,7 +268,7 @@ void launch_multitoken_paged_attention_hopper(
                           true>;
 
   using TMA_OUTPUT =
-      kernel::tma::tma_2d<bfloat16,
+      tma_2d<bfloat16,
                           3,
                           3,
                           3,
@@ -467,7 +476,6 @@ void launch_multitoken_paged_attention_hopper(
 #endif
 }
 
-
 template <typename KernelTraits,
           bool LEFT_SLIDING_WINDOW,
           bool CAUSAL,
@@ -483,10 +491,10 @@ cudaError_t
   using IdType = typename KernelTraits::IdType;
 
   using CollectiveMainloop =
-      kernel::CollectiveMainloop<typename Params::AdditionalParams,
+      CollectiveMainloop<typename Params::AdditionalParams,
                                KernelTraits,
                                CAUSAL>;
-  using CollectiveEpilogue = kernel::CollectiveEpilogue<KernelTraits>;
+  using CollectiveEpilogue = CollectiveEpilogue<KernelTraits>;
   using Scheduler =
       std::conditional_t<SAME_SCHEDULE_FOR_ALL_HEADS,
                          BatchPrefillTileScheduler<IdType>,
@@ -555,9 +563,9 @@ cudaError_t
 
   int device;
   cudaGetDevice(&device);
-  int multiprocessor_count;
-  FLASHINFER_CUDA_CALL(cudaDeviceGetAttribute(
-      &multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
+  int multiprocessor_count = 1;
+  // FLASHINFER_CUDA_CALL(cudaDeviceGetAttribute(
+  //     &multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
   dim3 grid_dims =
       Scheduler::get_grid_dim(scheduler_args, multiprocessor_count);
   static constexpr int ctaSize = KernelTraits::NUM_WARPS * 32;
@@ -580,35 +588,12 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatched(Params &params,
                                                    bool enable_pdl,
                                                    cudaStream_t stream) {
   static_assert(HEAD_DIM_VO == 64 || HEAD_DIM_VO == 128 || HEAD_DIM_VO == 256);
-  if (MASK_MODE == MaskMode::kCustom) {
-    return cudaErrorNotSupported; // Not supported yet.
-  }
   constexpr bool CAUSAL = MASK_MODE == MaskMode::kCausal;
   constexpr bool MULTIITEMSCORING = MASK_MODE == MaskMode::kMultiItemScoring;
   if constexpr (HEAD_DIM_QK == HEAD_DIM_VO) {
-    if constexpr (HEAD_DIM_VO == 64) {
-      // NOTE(Zihao): CTA_KV not tuned for HEAD_DIM == 64, need to optimize
-      // later
+    if constexpr (HEAD_DIM_VO == 128) {
       BatchPrefillWithPagedKVCacheKernelTraitsDispatched<
-          AttentionKernelTraits</*USE_TMA_LOAD_KV=*/false,
-                                HEAD_DIM_QK,
-                                HEAD_DIM_VO,
-                                /*CTA_Q_=*/192,
-                                /*CTA_KV_=*/96,
-                                /*NUM_STAGES_=*/2,
-                                typename Params::DTypeQ,
-                                typename Params::DTypeKV,
-                                typename Params::DTypeO,
-                                typename Params::IdType,
-                                AttentionVariant>,
-          LEFT_SLIDING_WINDOW,
-          CAUSAL,
-          SAME_SCHEDULE_FOR_ALL_HEADS,
-          Params,
-          MULTIITEMSCORING>(params, stream);
-    } else if constexpr (HEAD_DIM_VO == 128) {
-      BatchPrefillWithPagedKVCacheKernelTraitsDispatched<
-          AttentionKernelTraits</*USE_TMA_LOAD_KV=*/false,
+          AttentionKernelTraits</*USE_TMA_LOAD_KV=*/true,
                                 HEAD_DIM_QK,
                                 HEAD_DIM_VO,
                                 /*CTA_Q_=*/128,
@@ -624,34 +609,183 @@ cudaError_t BatchPrefillWithPagedKVCacheDispatched(Params &params,
           SAME_SCHEDULE_FOR_ALL_HEADS,
           Params,
           MULTIITEMSCORING>(params, stream);
-    } else {
-      // HEAD_DIM == 256;
-      // NOTE(Zihao): CTA_KV not tuned for HEAD_DIM == 256, need to optimize
-      // later
-      BatchPrefillWithPagedKVCacheKernelTraitsDispatched<
-          AttentionKernelTraits</*USE_TMA_LOAD_KV=*/false,
-                                HEAD_DIM_QK,
-                                HEAD_DIM_VO,
-                                /*CTA_Q_=*/128,
-                                /*CTA_KV_=*/32,
-                                /*NUM_STAGES_=*/2,
-                                typename Params::DTypeQ,
-                                typename Params::DTypeKV,
-                                typename Params::DTypeO,
-                                typename Params::IdType,
-                                AttentionVariant>,
-          LEFT_SLIDING_WINDOW,
-          CAUSAL,
-          SAME_SCHEDULE_FOR_ALL_HEADS,
-          Params,
-          MULTIITEMSCORING>(params, stream);
-    }
+    } 
+    // else if constexpr (HEAD_DIM_VO == 64) {
+    //   // NOTE(Zihao): CTA_KV not tuned for HEAD_DIM == 64, need to optimize
+    //   // later
+    //   BatchPrefillWithPagedKVCacheKernelTraitsDispatched<
+    //       AttentionKernelTraits</*USE_TMA_LOAD_KV=*/false,
+    //                             HEAD_DIM_QK,
+    //                             HEAD_DIM_VO,
+    //                             /*CTA_Q_=*/192,
+    //                             /*CTA_KV_=*/96,
+    //                             /*NUM_STAGES_=*/2,
+    //                             typename Params::DTypeQ,
+    //                             typename Params::DTypeKV,
+    //                             typename Params::DTypeO,
+    //                             typename Params::IdType,
+    //                             AttentionVariant>,
+    //       LEFT_SLIDING_WINDOW,
+    //       CAUSAL,
+    //       SAME_SCHEDULE_FOR_ALL_HEADS,
+    //       Params,
+    //       MULTIITEMSCORING>(params, stream);
+    // } 
+    // else {
+    //   // HEAD_DIM == 256;
+    //   // NOTE(Zihao): CTA_KV not tuned for HEAD_DIM == 256, need to optimize
+    //   // later
+    //   BatchPrefillWithPagedKVCacheKernelTraitsDispatched<
+    //       AttentionKernelTraits</*USE_TMA_LOAD_KV=*/false,
+    //                             HEAD_DIM_QK,
+    //                             HEAD_DIM_VO,
+    //                             /*CTA_Q_=*/128,
+    //                             /*CTA_KV_=*/32,
+    //                             /*NUM_STAGES_=*/2,
+    //                             typename Params::DTypeQ,
+    //                             typename Params::DTypeKV,
+    //                             typename Params::DTypeO,
+    //                             typename Params::IdType,
+    //                             AttentionVariant>,
+    //       LEFT_SLIDING_WINDOW,
+    //       CAUSAL,
+    //       SAME_SCHEDULE_FOR_ALL_HEADS,
+    //       Params,
+    //       MULTIITEMSCORING>(params, stream);
+    // }
   } else {
     return cudaErrorNotSupported;
   }
   cudaError_t status = cudaGetLastError();
   return status;
 };
+
+template <typename DTypeQ_, typename DTypeKV_, typename DTypeO_, typename IdType_>
+struct PagedParams {
+  using DTypeQ = DTypeQ_;
+  using DTypeKV = DTypeKV_;
+  using DTypeO = DTypeO_;
+  using IdType = IdType_;
+  
+  DTypeQ* q_ptr;
+  DTypeKV* k_ptr;
+  DTypeKV* v_ptr;
+  DTypeO* o_ptr;
+  float* lse_ptr;
+  int64_t q_stride_n;
+  int64_t q_stride_h;
+  int64_t k_stride_n;
+  int64_t k_stride_h;
+  int64_t v_stride_n;
+  int64_t v_stride_h;
+  int64_t o_stride_n;
+  int64_t o_stride_h;
+  int64_t nnz_qo;
+  int64_t num_qo_heads;
+  int64_t num_kv_heads;
+  int64_t group_size;
+  int64_t page_size;
+  int window_left;
+  bool causal;
+  IdType* qo_tile_indices;
+  IdType* qo_indptr;
+  IdType* kv_indptr;
+  IdType* qo_lens;
+  IdType* kv_lens;
+  IdType* head_indices;
+  IdType* work_indptr;
+  IdType* batch_indices;
+  IdType* kv_indices;
+  
+  struct AdditionalParamsStruct {
+    float sm_scale;
+  } additional_params;
+  using AdditionalParams = AdditionalParamsStruct;
+};
+
+// New entry function using BatchPrefillWithPagedKVCacheDispatched
+template <typename DTypeQ, typename DTypeKV, typename DTypeO, typename IdType>
+cudaError_t run_paged_attention_with_dispatcher(
+    void* q_ptr,
+    void* k_ptr, 
+    void* v_ptr,
+    void* o_ptr,
+    float* lse_ptr,
+    int64_t q_stride_n,
+    int64_t q_stride_h,
+    int64_t k_stride_n,
+    int64_t k_stride_h,
+    int64_t v_stride_n,
+    int64_t v_stride_h,
+    int64_t o_stride_n,
+    int64_t o_stride_h,
+    int64_t nnz_qo,
+    int64_t num_qo_heads,
+    int64_t num_kv_heads,
+    int64_t head_dim_qk,
+    int64_t head_dim_vo,
+    int64_t page_size,
+    IdType* qo_tile_indices,
+    IdType* qo_indptr,
+    IdType* kv_indptr,
+    IdType* qo_lens,
+    IdType* kv_lens,
+    IdType* head_indices,
+    IdType* work_indptr,
+    IdType* batch_indices,
+    IdType* kv_indices,
+    int window_left,
+    int mask_mode_code,
+    bool enable_pdl,
+    cudaStream_t stream) {
+  
+  using Params = PagedParams<DTypeQ, DTypeKV, DTypeO, IdType>;
+  Params params;
+  params.q_ptr = static_cast<DTypeQ*>(q_ptr);
+  params.k_ptr = static_cast<DTypeKV*>(k_ptr);
+  params.v_ptr = static_cast<DTypeKV*>(v_ptr);
+  params.o_ptr = static_cast<DTypeO*>(o_ptr);
+  params.lse_ptr = lse_ptr;
+  params.q_stride_n = q_stride_n;
+  params.q_stride_h = q_stride_h;
+  params.k_stride_n = k_stride_n;
+  params.k_stride_h = k_stride_h;
+  params.v_stride_n = v_stride_n;
+  params.v_stride_h = v_stride_h;
+  params.o_stride_n = o_stride_n;
+  params.o_stride_h = o_stride_h;
+  params.nnz_qo = nnz_qo;
+  params.num_qo_heads = num_qo_heads;
+  params.num_kv_heads = num_kv_heads;
+  params.group_size = num_qo_heads / num_kv_heads;
+  params.page_size = page_size;
+  params.window_left = window_left;
+  params.causal = (mask_mode_code == 1);
+  params.qo_tile_indices = qo_tile_indices;
+  params.qo_indptr = qo_indptr;
+  params.kv_indptr = kv_indptr;
+  params.qo_lens = qo_lens;
+  params.kv_lens = kv_lens;
+  params.head_indices = head_indices;
+  params.work_indptr = work_indptr;
+  params.batch_indices = batch_indices;
+  params.kv_indices = kv_indices;
+  
+  // 初始化 additional_params
+  params.additional_params.sm_scale = 1.0f / sqrtf(static_cast<float>(head_dim_qk));
+  
+  // 调用分发函数
+  MaskMode mask_mode = static_cast<MaskMode>(mask_mode_code);
+  bool use_sliding_window = (window_left != -1);
+  bool same_schedule_for_all_heads = true; // 可以作为参数传入
+  
+  using AttentionVariant = StandardAttention;
+
+
+  return BatchPrefillWithPagedKVCacheDispatched<
+  128, 128, MaskMode::kCausal, false, true, AttentionVariant>(
+      params, enable_pdl, stream);
+}
 
 void multitoken_paged_attention_hopper(
     torch::Tensor qkv,
@@ -731,6 +865,109 @@ void multitoken_paged_attention_hopper(
   }
 }
 
+// 使用分发器的替代版本
+void multitoken_paged_attention_hopper_v2(
+    torch::Tensor qkv,
+    torch::Tensor paged_k_cache,
+    torch::Tensor paged_v_cache,
+    torch::Tensor output,
+    torch::Tensor qo_indptr_buffer,
+    torch::Tensor paged_kv_indptr_buffer,
+    torch::Tensor paged_kv_indices_buffer,
+    torch::Tensor paged_kv_last_page_len_buffer,
+    torch::Tensor qo_lens,
+    torch::Tensor kv_lens,
+    int request_id,
+    bool qk_norm,
+    bool rope,
+    int mask_mode_code = 1,  // 1 for causal
+    int window_left = -1,
+    bool enable_pdl = false,
+    torch::optional<torch::Tensor> q_norm_weight = torch::nullopt,
+    torch::optional<torch::Tensor> k_norm_weight = torch::nullopt,
+    torch::optional<torch::Tensor> cos = torch::nullopt,
+    torch::optional<torch::Tensor> sin = torch::nullopt,
+    float q_eps = 0.0f,
+    float k_eps = 0.0f) {
+  
+
+  int const qo_heads = 4;
+  int const kv_heads = 1;
+
+  int const num_tokens = qkv.size(0);
+  int const total_heads = qo_heads + 2 * kv_heads;
+  int const head_dim = 128;
+
+  int const page_size = paged_k_cache.size(1); // [num_pages, page_size, num_heads, head_dim]
+
+  void *qkv_ptr = qkv.data_ptr();
+  void *paged_k_cache_ptr = paged_k_cache.data_ptr();
+  void *paged_v_cache_ptr = paged_v_cache.data_ptr();
+  void *output_ptr = output.data_ptr();
+  
+  // 准备调度所需的缓冲区（这里需要根据实际情况准备）
+  // 注意：这些通常需要预先计算和分配
+  int *qo_tile_indices = nullptr;  // 需要实际分配和填充
+  int *qo_indptr = qo_indptr_buffer.data_ptr<int>();
+  int *kv_indptr = paged_kv_indptr_buffer.data_ptr<int>();
+  int *qo_lens_ptr = qo_lens.data_ptr<int>();
+  int *kv_lens_ptr = kv_lens.data_ptr<int>();
+  int *head_indices = nullptr;     // 需要实际分配和填充
+  int *work_indptr = nullptr;      // 需要实际分配和填充
+  int *batch_indices = nullptr;    // 需要实际分配和填充
+  int *kv_indices = paged_kv_indices_buffer.data_ptr<int>();
+  
+  // 获取 CUDA stream (使用默认stream或从tensor获取)
+  cudaStream_t stream = 0; // 默认stream
+  // 如果需要使用当前stream，可以用: at::cuda::getCurrentCUDAStream(qkv.device().index()).stream()
+  
+  // 调用分发器
+  using DTypeQ = cutlass::bfloat16_t;
+  using DTypeKV = cutlass::bfloat16_t;
+  using DTypeO = cutlass::bfloat16_t;
+  using IdType = int;
+  
+  cudaError_t status = run_paged_attention_with_dispatcher<DTypeQ, DTypeKV, DTypeO, IdType>(
+      qkv_ptr,                    // q_ptr (从 qkv 中)
+      paged_k_cache_ptr,          // k_ptr
+      paged_v_cache_ptr,          // v_ptr
+      output_ptr,                 // o_ptr
+      nullptr,                    // lse_ptr (可选)
+      qkv.stride(0),             // q_stride_n
+      qkv.stride(1),             // q_stride_h
+      paged_k_cache.stride(1),   // k_stride_n
+      paged_k_cache.stride(2),   // k_stride_h
+      paged_v_cache.stride(1),   // v_stride_n
+      paged_v_cache.stride(2),   // v_stride_h
+      output.stride(0),          // o_stride_n
+      output.stride(1),          // o_stride_h
+      num_tokens,                // nnz_qo
+      qo_heads,                  // num_qo_heads
+      kv_heads,                  // num_kv_heads
+      head_dim,                  // head_dim_qk
+      head_dim,                  // head_dim_vo
+      page_size,                 // page_size
+      qo_tile_indices,           // qo_tile_indices
+      qo_indptr,                 // qo_indptr
+      kv_indptr,                 // kv_indptr
+      qo_lens_ptr,               // qo_lens
+      kv_lens_ptr,               // kv_lens
+      head_indices,              // head_indices
+      work_indptr,               // work_indptr
+      batch_indices,             // batch_indices
+      kv_indices,                // kv_indices
+      window_left,               // window_left
+      mask_mode_code,            // mask_mode_code
+      enable_pdl,                // enable_pdl
+      stream                     // stream
+  );
+  
+  if (status != cudaSuccess) {
+    printf("Paged attention dispatcher failed with error: %s\n", cudaGetErrorString(status));
+  }
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("multitoken_paged_attention_hopper", &multitoken_paged_attention_hopper, "Multitoken Paged Attention Hopper");
+  m.def("multitoken_paged_attention_hopper_v2", &multitoken_paged_attention_hopper_v2, "Multitoken Paged Attention Hopper V2 (使用 BatchPrefillWithPagedKVCacheDispatched)");
 }
