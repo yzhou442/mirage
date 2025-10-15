@@ -126,7 +126,7 @@ paged_v_cache = torch.empty(
 # )
 # only handle 2,3,4 tokens for this request
 # start, end = 2, 5
-start, end = 2, 5
+start, end = 0, max_tokens
 num_tokens = end - start 
 qo_indptr_buffer = torch.tensor([start, end], device=device, dtype=torch.int32)
 paged_kv_indptr_buffer = torch.tensor([0, 1], device=device, dtype=torch.int32)
@@ -217,8 +217,8 @@ torch_out = torch_multitoken_paged_attention(
     eps=eps,
 )
 
-print("mirage_output", mirage_output)
-print("torch_out", torch_out)
+# print("mirage_output", mirage_output)
+# print("torch_out", torch_out)
 print("Ratio (Mirage / Torch):")
 mirage_output_slice = mirage_output[start*qo_heads:end*qo_heads, :]
 print(mirage_output_slice / torch_out)

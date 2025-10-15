@@ -26,6 +26,7 @@
 #include <nvshmemx.h>
 #endif
 #include "tasks/hopper/utils.cuh"
+#include "tasks/common/common_header.cuh"
 #include <thread>
 #include <unistd.h>
 #include <vector>
