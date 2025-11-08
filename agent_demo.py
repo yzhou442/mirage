@@ -6,6 +6,7 @@ from typing import Callable, Optional, Tuple, Dict, Any
 import torch
 import logging
 import os
+import time
 
 from mirage.mpk.mpk import MPK, MPKMetadata, MirageModelConfig
 
@@ -15,6 +16,7 @@ class StageWorker(threading.Thread):
         self,
         *,
         name: str,
+        thread_id: int,
         # build config
         model: str,
         max_seq_length: int,
@@ -27,6 +29,8 @@ class StageWorker(threading.Thread):
         output_dir: Optional[str],
         use_cutlass_kernel: bool,
         max_sm_num: int,
+        num_workers: int,
+        num_schedulers: int,
         # logging config
         log_dir: str,
         log_level: str,
@@ -37,6 +41,7 @@ class StageWorker(threading.Thread):
         super().__init__(name=name)
         # Config
         self.model_name = model
+        self.thread_id = thread_id
         self.max_seq_length = max_seq_length
         self.max_num_batched_tokens = max_num_batched_tokens
         self.max_num_batched_requests = max_num_batched_requests
@@ -85,6 +90,10 @@ class StageWorker(threading.Thread):
         self._paged_kv_indices_buffer: Optional[torch.Tensor] = None
         self._paged_kv_last_page_len_buffer: Optional[torch.Tensor] = None
         self._profiler_tensor: Optional[torch.Tensor] = None
+        self.num_workers = num_workers
+        self.num_schedulers = num_schedulers
+        self.start_time = None
+        
 
         # Build immediately
         self._build_mpk()
@@ -130,6 +139,7 @@ class StageWorker(threading.Thread):
 
         mpk_metadata = MPKMetadata(
             mode="offline",
+            thread_id=self.thread_id,
             total_num_requests=total_num_requests,
             num_remote_schedulers=0,
             max_seq_length=self.max_seq_length,
@@ -157,23 +167,29 @@ class StageWorker(threading.Thread):
             spec_decode_config=None,
             use_cutlass_kernel=self.use_cutlass_kernel,
             max_sm_num=self.max_sm_num,
+            num_workers=self.num_workers,
+            num_schedulers=self.num_schedulers,
         )
         self.logger.info(f"max_sm_num: {self.max_sm_num}")
 
         self.mpk = MPK(mpk_metadata)
         self.mpk.build()
         self.mpk.compile(output_dir=self.output_dir)
+        
+    def timing_from_start(self) -> float:
+        if self.start_time is None:
+            self.start_time = time.time()
+            return 0.0
+        return time.time() - self.start_time
 
     def run(self) -> None:
-        self.logger.info("worker started")
-        self.logger.info(f"ID of self.mpk.persistent_kernel.init_func: {id(self.mpk.persistent_kernel.init_func)}")
-        self.logger.info(f"ID of self.mpk.persistent_kernel.launch_func: {id(self.mpk.persistent_kernel.launch_func)}")
-        self.logger.info(f"ID of self.mpk.persistent_kernel.finalize_func: {id(self.mpk.persistent_kernel.finalize_func)}")
+        self.logger.info(f"Worker [{self.name}] started")
+        self.logger.info(f"Time taken from start: {self.timing_from_start()} ms")
         while True:
             item = self.in_queue.get()
             if item is None:
                 # Propagate termination downstream and exit.
-                self.logger.info("shutdown signal received; forwarding and exiting")
+                self.logger.info("Shutdown signal received; forwarding and exiting")
                 self.out_queue.put(None)
                 self.in_queue.task_done()
                 break
@@ -182,22 +198,33 @@ class StageWorker(threading.Thread):
             self.logger.info("recv req_id=%d input=%s", req_id, text)
             prompt = self.transform(text) if self.transform else text
 
+            print(f"Agent{self.thread_id} Dealing with req_id={req_id} input={text}")
             with torch.cuda.stream(self.stream):
+                self.mpk.clear_buffers()
                 self.mpk.load_new_request(prompt)
-                self.mpk()
+                self.mpk.init_request_func()
+                self.mpk(logger=self.logger)
 
             # Ensure this request finished on this stage's stream
             self.stream.synchronize()
 
             # Decode the single-request result
-            cur_step = int(self.step[0].item())
-            generated_ids = self.tokens[0, : cur_step + 1]
-            output = self.mpk.decode(generated_ids)
+            try:
+                cur_step = int(self.step[0].item())
+                generated_ids = self.tokens[0, : cur_step + 1]
+                output = self.mpk.decode(generated_ids)
+            except Exception as e:
+                self.logger.error(f"Error decoding output: {e}, cur_step: {cur_step}, generated_ids: {generated_ids}")
+                output = ""
             
-            # get content after </think>
-            output = output.split("</think>")[1].strip()
+            try:
+                output = output.split("</think>")[1].strip()
+            except IndexError:
+                # warn
+                self.logger.warning("No </think> found in output")
+                output = output
 
-            self.logger.info("send req_id=%d output=%s", req_id, output)
+            self.logger.info(f"send req_id={req_id} output={output} time={self.timing_from_start()} ms, output:{output}")
             self.out_queue.put((req_id, output))
             self.in_queue.task_done()
         self.logger.info("worker stopped")
@@ -205,8 +232,8 @@ class StageWorker(threading.Thread):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Three-stage MPK agent pipeline demo")
-    parser.add_argument("--model", type=str, default="Qwen/Qwen3-1.7B", help="HF model id")
-    parser.add_argument("--max-seq-length", type=int, default=512)
+    # parser.add_argument("--model", type=str, default="Qwen/Qwen3-1.7B", help="HF model id")
+    parser.add_argument("--max-seq-length", type=int, default=1024)
     parser.add_argument("--max-num-batched-tokens", type=int, default=8)
     parser.add_argument("--max-num-batched-requests", type=int, default=1)
     parser.add_argument("--page-size", type=int, default=4096)
@@ -236,13 +263,7 @@ def main() -> None:
         default="Give me a short introduction to large language model.",
         help="Base text of stage-1 prompts",
     )
-    args = parser.parse_args()
-
-    # Queues for pipeline
-    q_in: "queue.Queue[Optional[Tuple[int, str]]]" = queue.Queue(maxsize=8)
-    q_12: "queue.Queue[Optional[Tuple[int, str]]]" = queue.Queue(maxsize=8)
-    q_23: "queue.Queue[Optional[Tuple[int, str]]]" = queue.Queue(maxsize=8)
-    q_out: "queue.Queue[Optional[Tuple[int, str]]]" = queue.Queue(maxsize=8)
+    args = parser.parse_args() 
 
     # Stage transforms
     def tfm1(text: str) -> str:
@@ -252,33 +273,56 @@ def main() -> None:
         return f"[Agent2 任务]\n请对下述内容进行要点总结：\n{text}"
 
     def tfm3(text: str) -> str:
-        return f"[Agent3 任务]\n依据以下内容提取3个关键词：\n{text}"
+        return f"[Agent3 任务]\n依据以下内容提取3个关键词，只返回关键词，不要返回任何其他解释：\n{text}"
+    
+    tfs = [tfm1, tfm2, tfm3]
 
-    max_sm_num = 108 / 3
+    # max_sm_num = 36
+    max_sm_num = 40
+    
+    # models = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-8B", "Qwen/Qwen3-14B"]
+    # models = ["Qwen/Qwen3-8B", "Qwen/Qwen3-8B"]
+    models = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-1.7B"]
+    # num_workers = [40, 40, 40]
+    num_workers = [32, 32, 32]
+    num_schedulers = [8, 8, 8]
+    # num_workers = [max_sm_num, max_sm_num, max_sm_num]
+    # num_schedulers = [6, 6, 6]
+    queues = [queue.Queue(maxsize=8) for _ in range(len(models) + 1)]
+    kwargs_list = []
+    workers = []
     # Workers (each owns its MPK and tensors)
-    common_kwargs = dict(
-        model=args.model,
-        max_seq_length=args.max_seq_length,
-        max_num_batched_tokens=args.max_num_batched_tokens,
-        max_num_batched_requests=args.max_num_batched_requests,
-        page_size=args.page_size,
-        max_num_pages=args.max_num_pages,
-        profiling=args.profiling,
-        trace_name=args.trace_name,
-        output_dir=args.output_dir,
-        use_cutlass_kernel=args.use_cutlass_kernel,
-        log_dir=args.log_dir,
-        log_level=args.log_level,
-        max_sm_num=max_sm_num,
-    )
+    for i in range(len(models)):
+        kwargs = dict(
+            thread_id=i,
+            model=models[i],
+            max_seq_length=args.max_seq_length,
+            max_num_batched_tokens=args.max_num_batched_tokens,
+            max_num_batched_requests=args.max_num_batched_requests,
+            page_size=args.page_size,
+            max_num_pages=args.max_num_pages,
+            profiling=args.profiling,
+            trace_name=args.trace_name,
+            output_dir=args.output_dir,
+            use_cutlass_kernel=args.use_cutlass_kernel,
+            max_sm_num=max_sm_num,
+            num_workers=num_workers[i],
+            num_schedulers=num_schedulers[i],
+            log_dir=args.log_dir,
+            log_level=args.log_level,
+        )
+        # kwargs_list.append(kwargs)
+        w = StageWorker(name=f"Stage-{i+1}", in_queue=queues[i], out_queue=queues[i+1], transform=tfs[i], **kwargs)
+        workers.append(w)
+    # w1 = StageWorker(name="Stage-1", in_queue=q_in, out_queue=q_12, transform=tfm1, **common_kwargs)
+    # w2 = StageWorker(name="Stage-2", in_queue=q_12, out_queue=q_23, transform=tfm2, **common_kwargs)
+    # w3 = StageWorker(name="Stage-3", in_queue=q_23, out_queue=q_out, transform=tfm3, **common_kwargs)
 
-    w1 = StageWorker(name="Stage-1", in_queue=q_in, out_queue=q_12, transform=tfm1, **common_kwargs)
-    w2 = StageWorker(name="Stage-2", in_queue=q_12, out_queue=q_23, transform=tfm2, **common_kwargs)
-    w3 = StageWorker(name="Stage-3", in_queue=q_23, out_queue=q_out, transform=tfm3, **common_kwargs)
-
-    w1.start()
-    w2.start()
-    w3.start()
+    for w in workers:
+        w.start()
+        
+    q_in = queues[0]
+    q_out = queues[-1]
 
     # Enqueue requests to stage-1
     for i in range(args.num_requests):
@@ -302,9 +346,8 @@ def main() -> None:
         q_out.task_done()
 
     # Drain and join
-    w1.join()
-    w2.join()
-    w3.join()
+    for w in workers:
+        w.join()
 
     # Print ordered outputs
     for i in range(args.num_requests):
