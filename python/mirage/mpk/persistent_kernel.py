@@ -21,10 +21,11 @@ static PyObject *init_func(PyObject *self, PyObject *args) {
   PyObject *meta_list, *py_profiler_buffer;
   std::vector<void*> meta_tensors;
   int my_mpi_rank, num_workers, num_local_schedulers, num_remote_schedulers, max_seq_length, total_num_requests;
+  int thread_id = -1;
   long long eos_token_id;
   void *profiler_buffer;
 
-  if (!PyArg_ParseTuple(args, "OOiiiiiiL", &meta_list, &py_profiler_buffer, &my_mpi_rank, &num_workers, &num_local_schedulers, &num_remote_schedulers, &max_seq_length, &total_num_requests, &eos_token_id)) {
+  if (!PyArg_ParseTuple(args, "OOiiiiiiL|i", &meta_list, &py_profiler_buffer, &my_mpi_rank, &num_workers, &num_local_schedulers, &num_remote_schedulers, &max_seq_length, &total_num_requests, &eos_token_id, &thread_id)) {
     PyErr_SetString(PyExc_TypeError, "Invalid parameters");
     return NULL;
   }
@@ -59,8 +60,9 @@ static PyObject *init_request_func(PyObject *self, PyObject *args) {
 }
 
 static PyObject *launch_func(PyObject *self, PyObject *args) {
+   Py_BEGIN_ALLOW_THREADS
   launch_persistent_kernel();
-
+   Py_END_ALLOW_THREADS
   Py_RETURN_NONE;
 }
 
@@ -143,7 +145,7 @@ def get_compile_command(
         # "-G",
         # "--ptxas-options=-v",
         # "-Xptxas=-v",
-        # "-lineinfo",
+        "-lineinfo",
         f"-I{py_include_dir}",
         f"-I{mirage_inc_path}",
         f"-I{os.path.join(mirage_inc_path, 'mirage/persistent_kernel')}",
@@ -243,13 +245,15 @@ class PersistentKernel:
         profiler_tensor: torch.Tensor,
         trace_name: str,
         spec_decode_config: SpecDecodeConfig,
-        use_cutlass_kernel: bool
+        use_cutlass_kernel: bool,
+        thread_id: int = -1
     ):
         self.__finalized__ = False
         self._is_compiled = False
         if mode not in valid_persistent_kernel_modes:
             raise ValueError(f"Invalid persistent kernel mode: {mode}")
         self.mode = mode
+        self.thread_id = thread_id
         self.world_size = world_size
         self.mpi_rank = mpi_rank
         self.num_workers = num_workers
@@ -1131,6 +1135,7 @@ class PersistentKernel:
             self.max_seq_length,
             self.total_num_requests,
             self.eos_token_id,
+            self.thread_id,
         )
 
         self._is_compiled = True

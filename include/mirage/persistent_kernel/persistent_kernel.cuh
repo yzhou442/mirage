@@ -463,6 +463,9 @@ __device__ __forceinline__ void execute_worker(RuntimeConfig config) {
   // worker_queue_ids: 2 * 4 = 8 B
   // worker_queues: 2 * 8 = 16 B
   // remaining: 3016 B
+  if (threadIdx.x == 0) {
+    printf("[Worker for thread %d] Starting execution\n", config.thread_id);
+  }
 
   constexpr int TASK_DESCS_BUFFER_LENGTH = std::min(
       (mirage::runtime::WORKER_RESERVED_STATIC_SHARED_MEMORY_SIZE - 56) /
@@ -514,6 +517,7 @@ __device__ __forceinline__ void execute_worker(RuntimeConfig config) {
       int queue_idx = 0;
       if (threadIdx.x == 0) {
         while (next_task_pos[queue_idx] == last_task_pos[queue_idx]) {
+          printf("[worker host thread %d] worker_queue_ids[queue_idx]: %d\n", threadIdx.x, worker_queue_ids[queue_idx]);
           last_task_pos[queue_idx] =
               ld_acquire_gpu_u64(&config.worker_queue_last_ready_task_id
                                       [worker_queue_ids[queue_idx]]);
@@ -1066,7 +1070,8 @@ extern "C" void init_persistent_kernel(std::vector<void *> meta_tensors,
                                        int num_remote_schedulers,
                                        int max_seq_length,
                                        int total_num_requests,
-                                       long long eos_token_id) {
+                                       long long eos_token_id,
+                                       int thread_id) {
   assert(meta_tensors.size() == 10);
   global_runtime_config.step = static_cast<int *>(meta_tensors[0]);
   global_runtime_config.tokens = static_cast<long long *>(meta_tensors[1]);
@@ -1089,6 +1094,7 @@ extern "C" void init_persistent_kernel(std::vector<void *> meta_tensors,
   global_runtime_config.max_seq_length = max_seq_length;
   global_runtime_config.eos_token_id = eos_token_id;
   global_runtime_config.profiler_buffer = profiler_buffer;
+  global_runtime_config.thread_id = thread_id;
   int num_schedulers = num_local_schedulers + num_remote_schedulers;
 
   // Initialize nvshmem
@@ -1295,6 +1301,7 @@ extern "C" void launch_persistent_kernel() {
   if (global_runtime_config.split_worker_scheduler) {
     printf("worker kernel & scheduler kernel\n");
     printf("smem size: %d\n", MAX_DYNAMIC_SHARED_MEMORY_SIZE);
+    printf("[launch_persistent_kernel thread %d] Worker stream: %p, scheduler stream: %p\n", global_runtime_config.thread_id, global_runtime_config.worker_stream, global_runtime_config.scheduler_stream);
 
     // The split kernel does not support NVSHMEM because
     // nvshmemx_collective_launch launches kernels sequentially, which blocks

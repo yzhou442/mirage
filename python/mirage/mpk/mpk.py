@@ -21,6 +21,7 @@ class MPKMetadata:
     # ---------- MPK class external state bundled here ----------
     # args
     mode: str = "offline"
+    thread_id: int = -1
     total_num_requests: int = 1
     num_remote_schedulers: int = 0
     max_seq_length: int = 0
@@ -122,6 +123,7 @@ class MPK:
         args = meta
         self.model_name = args.model_name
         self.device = args.device
+        self.thread_id = args.thread_id
         self.total_num_requests = args.total_num_requests
         self.weight_from_model = args.weight_from_model
         self.max_seq_length = args.max_seq_length
@@ -176,6 +178,7 @@ class MPK:
         
         self.persistent_kernel = PersistentKernel(
             mode=args.mode,
+            thread_id=self.thread_id,
             world_size=self.world_size,
             mpi_rank=self.rank,
             num_workers=self.num_workers,

@@ -21,19 +21,19 @@
 
 namespace kernel {
 
-CUTLASS_DEVICE
-static bool try_wait_barrier(uint64_t &smem_barrier, uint32_t phase) {
-  uint32_t smem_int_ptr = cute::cast_smem_ptr_to_uint(&smem_barrier);
-  uint32_t waitComplete;
+// CUTLASS_DEVICE
+// static bool try_wait_barrier(uint64_t &smem_barrier, uint32_t phase) {
+//   uint32_t smem_int_ptr = cute::cast_smem_ptr_to_uint(&smem_barrier);
+//   uint32_t waitComplete;
 
-  asm volatile("{\n\t"
-               ".reg .pred P1; \n\t"
-               "mbarrier.try_wait.parity.shared::cta.b64 P1, [%1], %2; \n\t"
-               "selp.b32 %0, 1, 0, P1; \n\t"
-               "}"
-               : "=r"(waitComplete)
-               : "r"(smem_int_ptr), "r"(phase));
+//   asm volatile("{\n\t"
+//                ".reg .pred P1; \n\t"
+//                "mbarrier.try_wait.parity.shared::cta.b64 P1, [%1], %2; \n\t"
+//                "selp.b32 %0, 1, 0, P1; \n\t"
+//                "}"
+//                : "=r"(waitComplete)
+//                : "r"(smem_int_ptr), "r"(phase));
 
-  return static_cast<bool>(waitComplete);
-}
+//   return static_cast<bool>(waitComplete);
+// }
 } // namespace kernel
