@@ -463,9 +463,9 @@ __device__ __forceinline__ void execute_worker(RuntimeConfig config) {
   // worker_queue_ids: 2 * 4 = 8 B
   // worker_queues: 2 * 8 = 16 B
   // remaining: 3016 B
-  if (threadIdx.x == 0) {
-    printf("[Worker for thread %d] Starting execution\n", config.thread_id);
-  }
+  // if (threadIdx.x == 0) {
+  //   printf("[Worker for thread %d] Starting execution\n", config.thread_id);
+  // }
 
   constexpr int TASK_DESCS_BUFFER_LENGTH = std::min(
       (mirage::runtime::WORKER_RESERVED_STATIC_SHARED_MEMORY_SIZE - 56) /
@@ -517,7 +517,7 @@ __device__ __forceinline__ void execute_worker(RuntimeConfig config) {
       int queue_idx = 0;
       if (threadIdx.x == 0) {
         while (next_task_pos[queue_idx] == last_task_pos[queue_idx]) {
-          printf("[worker host thread %d] worker_queue_ids[queue_idx]: %d\n", threadIdx.x, worker_queue_ids[queue_idx]);
+          // printf("[worker host thread %d] worker_queue_ids[queue_idx]: %d\n", threadIdx.x, worker_queue_ids[queue_idx]);
           last_task_pos[queue_idx] =
               ld_acquire_gpu_u64(&config.worker_queue_last_ready_task_id
                                       [worker_queue_ids[queue_idx]]);
@@ -747,6 +747,7 @@ __device__ __forceinline__ void execute_worker(RuntimeConfig config) {
 // need to alter as there is only one warp per block
 __device__ __forceinline__ void execute_scheduler(RuntimeConfig config,
                                                   int offset) {
+  // printf("[Scheduler host %d] execute_scheduler Starts!\n", config.thread_id);
   int const num_schedulers =
       config.num_local_schedulers + config.num_remote_schedulers;
   // if we have more than 4 warps per thread block
@@ -1059,7 +1060,6 @@ static RuntimeConfig global_runtime_config;
 extern "C" void init_request_resources() {
   init_kernel<<<dim3(1, 1, 1), dim3(INIT_NUM_THREADS, 1, 1)>>>(
     global_runtime_config);
-  cudaDeviceSynchronize();
 }
 
 extern "C" void init_persistent_kernel(std::vector<void *> meta_tensors,
@@ -1267,14 +1267,11 @@ extern "C" void init_persistent_kernel(std::vector<void *> meta_tensors,
                        cudaFuncAttributeMaxDynamicSharedMemorySize,
                        MAX_DYNAMIC_SHARED_MEMORY_SIZE);
   // Create worker and scheduler streams
-  cudaStreamCreate(&global_runtime_config.worker_stream);
-  cudaStreamCreate(&global_runtime_config.scheduler_stream);
+  cudaStreamCreateWithFlags(&global_runtime_config.worker_stream, cudaStreamNonBlocking);
+  cudaStreamCreateWithFlags(&global_runtime_config.scheduler_stream, cudaStreamNonBlocking);
 
-  // launch init kernel
-  // init_kernel<<<dim3(1, 1, 1), dim3(INIT_NUM_THREADS, 1, 1)>>>(
-      // global_runtime_config);
-  // cudaDeviceSynchronize();
   init_request_resources();
+  cudaStreamSynchronize(NULL);
 #ifdef USE_NVSHMEM
   // Add a global barrier for all init_kernel to complete
   nvshmem_barrier_all();
@@ -1294,14 +1291,14 @@ extern "C" void launch_persistent_kernel() {
     prepare_kernel<<<dim3(global_runtime_config.num_workers, 1, 1),
                      dim3(128, 1, 1)>>>(global_runtime_config,
                                         end_of_task_graph_event_pos);
-    cudaDeviceSynchronize();
+    cudaStreamSynchronize(NULL);
   }
   int num_schedulers = global_runtime_config.num_local_schedulers +
                        global_runtime_config.num_remote_schedulers;
   if (global_runtime_config.split_worker_scheduler) {
     printf("worker kernel & scheduler kernel\n");
     printf("smem size: %d\n", MAX_DYNAMIC_SHARED_MEMORY_SIZE);
-    printf("[launch_persistent_kernel thread %d] Worker stream: %p, scheduler stream: %p\n", global_runtime_config.thread_id, global_runtime_config.worker_stream, global_runtime_config.scheduler_stream);
+    // printf("[launch_persistent_kernel thread %d] Worker stream: %p, scheduler stream: %p\n", global_runtime_config.thread_id, global_runtime_config.worker_stream, global_runtime_config.scheduler_stream);
 
     // The split kernel does not support NVSHMEM because
     // nvshmemx_collective_launch launches kernels sequentially, which blocks
@@ -1318,10 +1315,15 @@ extern "C" void launch_persistent_kernel() {
                        global_runtime_config.scheduler_stream>>>(
         global_runtime_config);
 
-    cudaError_t err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-      printf("CUDA kernel launch error: %s\n", cudaGetErrorString(err));
+    cudaError_t err_worker = cudaStreamSynchronize(global_runtime_config.worker_stream);
+    cudaError_t err_scheduler = cudaStreamSynchronize(global_runtime_config.scheduler_stream);
+    if (err_worker != cudaSuccess) {
+      printf("CUDA kernel launch error: %s\n", cudaGetErrorString(err_worker));
     }
+    if (err_scheduler != cudaSuccess) {
+      printf("CUDA kernel launch error: %s\n", cudaGetErrorString(err_scheduler));
+    }
+
     printf("Finished Launch Persistent Kernel\n");
   } else {
     printf("a single persistent kernel\n");

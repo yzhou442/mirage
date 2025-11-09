@@ -199,14 +199,21 @@ class StageWorker(threading.Thread):
             prompt = self.transform(text) if self.transform else text
 
             print(f"Agent{self.thread_id} Dealing with req_id={req_id} input={text}")
-            with torch.cuda.stream(self.stream):
-                self.mpk.clear_buffers()
-                self.mpk.load_new_request(prompt)
-                self.mpk.init_request_func()
-                self.mpk(logger=self.logger)
+            self.logger.info(f"Agent{self.thread_id} Dealing with req_id={req_id} input")
+            # with torch.cuda.stream(self.stream):
+            self.logger.info(f"Agent{self.thread_id} Clearing buffers")
+            self.mpk.clear_buffers()
+            self.logger.info(f"Agent{self.thread_id} Loading new request")
+            self.mpk.load_new_request(prompt)
+            self.logger.info(f"Agent{self.thread_id} Initializing request function")
+            self.mpk.init_request_func()
+            self.logger.info(f"Agent{self.thread_id} Running MPK")
+            self.mpk(logger=self.logger)
+            self.logger.info(f"Agent{self.thread_id} MPK finished")
 
             # Ensure this request finished on this stage's stream
-            self.stream.synchronize()
+            # self.stream.synchronize()
+            # self.logger.info(f"Agent{self.thread_id} Stream synchronized")
 
             # Decode the single-request result
             try:
@@ -281,10 +288,11 @@ def main() -> None:
     max_sm_num = 40
     
     # models = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-8B", "Qwen/Qwen3-14B"]
+    models = ["Qwen/Qwen3-14B", "Qwen/Qwen3-8B", "Qwen/Qwen3-1.7B"]
     # models = ["Qwen/Qwen3-8B", "Qwen/Qwen3-8B"]
-    models = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-1.7B"]
-    # num_workers = [40, 40, 40]
-    num_workers = [32, 32, 32]
+    # models = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-1.7B"]
+    num_workers = [48, 48, 40]
+    # num_workers = [32, 32, 32]
     num_schedulers = [8, 8, 8]
     # num_workers = [max_sm_num, max_sm_num, max_sm_num]
     # num_schedulers = [6, 6, 6]
