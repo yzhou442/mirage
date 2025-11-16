@@ -186,6 +186,7 @@ class StageWorker(threading.Thread):
         self.logger.info(f"Worker [{self.name}] started")
         self.logger.info(f"Time taken from start: {self.timing_from_start()} ms")
         while True:
+            time.sleep(0.001)  # Prevent busy waiting
             item = self.in_queue.get()
             if item is None:
                 # Propagate termination downstream and exit.
@@ -196,7 +197,10 @@ class StageWorker(threading.Thread):
 
             req_id, text = item
             self.logger.info("recv req_id=%d input=%s", req_id, text)
-            prompt = self.transform(text) if self.transform else text
+            # prompt = self.transform(text) if self.transform else text
+            prompt = """
+            Give me a short introduction to large language model.
+            """
 
             print(f"Agent{self.thread_id} Dealing with req_id={req_id} input={text}")
             self.logger.info(f"Agent{self.thread_id} Dealing with req_id={req_id} input")
@@ -231,7 +235,7 @@ class StageWorker(threading.Thread):
                 self.logger.warning("No </think> found in output")
                 output = output
 
-            self.logger.info(f"send req_id={req_id} output={output} time={self.timing_from_start()} ms, output:{output}")
+            self.logger.info(f"send req_id={req_id} time={self.timing_from_start()} ms, output:{output}")
             self.out_queue.put((req_id, output))
             self.in_queue.task_done()
         self.logger.info("worker stopped")
@@ -240,7 +244,7 @@ class StageWorker(threading.Thread):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Three-stage MPK agent pipeline demo")
     # parser.add_argument("--model", type=str, default="Qwen/Qwen3-1.7B", help="HF model id")
-    parser.add_argument("--max-seq-length", type=int, default=1024)
+    parser.add_argument("--max-seq-length", type=int, default=4096)
     parser.add_argument("--max-num-batched-tokens", type=int, default=8)
     parser.add_argument("--max-num-batched-requests", type=int, default=1)
     parser.add_argument("--page-size", type=int, default=4096)
@@ -287,15 +291,9 @@ def main() -> None:
     # max_sm_num = 36
     max_sm_num = 40
     
-    # models = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-8B", "Qwen/Qwen3-14B"]
-    models = ["Qwen/Qwen3-14B", "Qwen/Qwen3-8B", "Qwen/Qwen3-1.7B"]
-    # models = ["Qwen/Qwen3-8B", "Qwen/Qwen3-8B"]
-    # models = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-1.7B"]
-    num_workers = [48, 48, 40]
-    # num_workers = [32, 32, 32]
-    num_schedulers = [8, 8, 8]
-    # num_workers = [max_sm_num, max_sm_num, max_sm_num]
-    # num_schedulers = [6, 6, 6]
+    models = ["Qwen/Qwen3-8B", "Qwen/Qwen3-1.7B"]
+    num_workers = [64, 16]
+    num_schedulers = [8, 8]
     queues = [queue.Queue(maxsize=8) for _ in range(len(models) + 1)]
     kwargs_list = []
     workers = []

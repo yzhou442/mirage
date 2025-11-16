@@ -301,11 +301,12 @@ class Qwen3Builder(GraphBuilder):
                 grid_dim=(self.mpk.max_num_batched_tokens, 1, 1),
                 block_dim=(128, 1, 1),
             )
+            # print(w_qkv.dim(0))
             self.mpk.linear_layer(
                 input=self.rmsnorm_out,
                 weight=w_qkv,
                 output=self.attn_in,
-                grid_dim=(grid_for_rmsnorm_linear_layer(w_qkv.dim(0)), 1, 1),
+                grid_dim=(self.mpk.num_workers, 1, 1),
                 block_dim=(128, 1, 1),
             )
 
@@ -354,12 +355,13 @@ class Qwen3Builder(GraphBuilder):
             self.w = self.mpk.attach_input(
                 torch_tensor=state_dict[f"{prefix}self_attn.o_proj.weight"], name=f"layer_{i}_o_proj"
             )
+            # print(self.hidden_size)
             self.mpk.linear_with_residual_layer(
                 input=self.attn_out,
                 weight=self.w,
                 residual=self.x,
                 output=self.attn_proj_out,
-                grid_dim=(self.hidden_size // 64, 1, 1),
+                grid_dim=(self.mpk.num_workers, 1, 1),
                 block_dim=(128, 1, 1),
             )
             # reset residual input as x
@@ -370,7 +372,7 @@ class Qwen3Builder(GraphBuilder):
                     input=self.attn_proj_out,
                     buffer=self.allreduce_buf,
                     output=self.attn_allreduce_out,
-                    grid_dim=(self.hidden_size // 64, 1, 1),
+                    grid_dim=(self.mpk.num_workers, 1, 1),
                     block_dim=(128, 1, 1),
                 )
                 self.x = self.attn_allreduce_out
@@ -382,6 +384,7 @@ class Qwen3Builder(GraphBuilder):
             # 
             if (f"{prefix}mlp.gate_proj.weight" in state_dict) and (f"{prefix}mlp.gate_up_proj.weight" in state_dict):
                 rmsnorm_num_tasks = grid_for_rmsnorm_linear_layer(state_dict[f"{prefix}mlp.gate_up_proj.weight"].shape[0])
+                rmsnorm_num_tasks = self.mpk.num_workers if rmsnorm_num_tasks > self.mpk.num_workers else rmsnorm_num_tasks
                 inplace_shuffle_tensors(
                     [
                         state_dict[f"{prefix}mlp.gate_proj.weight"], # views
@@ -399,6 +402,7 @@ class Qwen3Builder(GraphBuilder):
                     state_dict[f"{prefix}mlp.gate_proj.weight"].shape[0] 
                     + state_dict[f"{prefix}mlp.up_proj.weight"].shape[0]
                 )
+                rmsnorm_num_tasks = self.mpk.num_workers if rmsnorm_num_tasks > self.mpk.num_workers else rmsnorm_num_tasks
                 if self.mpk.mode == "online_notoken":
                     self.w_gatedup_tensor = shuffle_tensors(
                         [
@@ -429,6 +433,7 @@ class Qwen3Builder(GraphBuilder):
                     )
             elif f"{prefix}mlp.gate_up_proj.weight" in state_dict:
                 rmsnorm_num_tasks = grid_for_rmsnorm_linear_layer(state_dict[f"{prefix}mlp.gate_up_proj.weight"].shape[0])
+                rmsnorm_num_tasks = self.mpk.num_workers if rmsnorm_num_tasks > self.mpk.num_workers else rmsnorm_num_tasks
                 w_gatedup = self.mpk.attach_input(
                     torch_tensor=state_dict[f"{prefix}mlp.gate_up_proj.weight"], name=f"layer_{i}_gatedup_proj"
                 )
@@ -464,7 +469,7 @@ class Qwen3Builder(GraphBuilder):
                 weight=self.w,
                 residual=self.x,
                 output=self.mlp_out,
-                grid_dim=(self.hidden_size // 64, 1, 1),
+                grid_dim=(self.mpk.num_workers, 1, 1),
                 block_dim=(128, 1, 1),
             )
             # reset residual input as x
@@ -474,7 +479,7 @@ class Qwen3Builder(GraphBuilder):
                     input=self.mlp_out,
                     buffer=self.allreduce_buf,
                     output=self.mlp_final,
-                    grid_dim=(self.hidden_size // 64, 1, 1),
+                    grid_dim=(self.mpk.num_workers, 1, 1),
                     block_dim=(128, 1, 1),
                 )
                 self.x = self.mlp_final
@@ -530,6 +535,8 @@ class Qwen3Builder(GraphBuilder):
             torch_tensor=state_dict["model.embed_tokens.weight"], name="embed_tokens"
         )
         
+        assert self.mpk.max_num_batched_tokens % self.mpk.num_workers == 0 or self.mpk.max_num_batched_tokens < self.mpk.num_workers
+        self.batch_size_task_split_num = min(self.mpk.max_num_batched_tokens, self.mpk.num_workers)
         self.mpk.embed_layer(
             input=self.x, 
             weight=self.w, 
@@ -556,11 +563,12 @@ class Qwen3Builder(GraphBuilder):
         )
         if with_lm_head:
             self.w_proj = self.mpk.attach_input(torch_tensor=self.lm_head_weight, name="lm_head")
+            # print(self.w_proj.dim(0))
             self.mpk.linear_layer(
                 input=self.rmsnorm_out,
                 weight=self.w_proj,
                 output=self.argmax_in,
-                grid_dim=(grid_for_rmsnorm_linear_layer(self.w_proj.dim(0)), 1, 1),
+                grid_dim=(self.mpk.num_workers, 1, 1),
                 block_dim=(128, 1, 1),
             )
 

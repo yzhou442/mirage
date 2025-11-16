@@ -189,7 +189,7 @@ class MPK:
             max_num_batched_tokens=self.max_num_batched_tokens,
             max_num_pages=args.max_num_pages,
             page_size=args.page_size,
-            eos_token_id=151645,
+            eos_token_id=-1,
             meta_tensors={
                 "step": self.step,
                 "tokens": self.tokens,
