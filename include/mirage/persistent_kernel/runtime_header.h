@@ -35,7 +35,8 @@ constexpr int MAX_DYNAMIC_SHARED_MEMORY_SIZE =
     99 * 1024 - WORKER_RESERVED_STATIC_SHARED_MEMORY_SIZE;
 #elif MPK_TARGET_CC >= 80
 constexpr int MAX_DYNAMIC_SHARED_MEMORY_SIZE =
-    163 * 1024 - WORKER_RESERVED_STATIC_SHARED_MEMORY_SIZE;
+    160 * 1024 - WORKER_RESERVED_STATIC_SHARED_MEMORY_SIZE;
+    // Have to be 160 for vllm compatibility, or program will stuck
 #else
 constexpr int MAX_DYNAMIC_SHARED_MEMORY_SIZE =
     163 * 1024 - WORKER_RESERVED_STATIC_SHARED_MEMORY_SIZE;
@@ -233,6 +234,7 @@ struct RuntimeConfig {
   int num_workers, num_local_schedulers, num_remote_schedulers, num_graphs;
   int num_gpus, my_gpu_id;
   int num_events;
+  int thread_id; // Used for debug
   unsigned long long int per_worker_queue_len, per_sched_queue_len;
   unsigned long long int *worker_queue_last_ready_task_id;
   unsigned long long int *sched_queue_last_ready_event_id;
@@ -255,7 +257,7 @@ struct RuntimeConfig {
   int *paged_kv_indptr_buffer;  // Metadata for LLM serving (paged attention)
   int *paged_kv_indices_buffer; // Metadata for LLM serving (paged attention)
   int *paged_kv_last_page_len_buffer; // Metadata for LLM serving
-#if defined(MODE_OFFLINE) || defined(MODE_ONLINE)
+#if defined(MODE_OFFLINE) || defined(MODE_ONLINE) || defined(MODE_ONLINE_NOTOKEN)
   int *prompt_length;     // Metadata for online/offline serving
   int *request_ids;       // Metadata for online/offline serving
   int *page_queue;        // Metadata for online/offline serving
@@ -265,6 +267,7 @@ struct RuntimeConfig {
   int total_num_requests; // Metadata for LLM serving
 #endif
   void *profiler_buffer;
+  void *cpu_stream_buffer;
   bool split_worker_scheduler;
   cudaStream_t worker_stream, scheduler_stream;
 };
