@@ -1302,6 +1302,7 @@ extern "C" void launch_persistent_kernel() {
   if (global_runtime_config.split_worker_scheduler) {
     printf("worker kernel & scheduler kernel\n");
     printf("smem size: %d\n", MAX_DYNAMIC_SHARED_MEMORY_SIZE);
+    // auto start = std::chrono::high_resolution_clock::now();
     // printf("[launch_persistent_kernel thread %d] Worker stream: %p, scheduler stream: %p\n", global_runtime_config.thread_id, global_runtime_config.worker_stream, global_runtime_config.scheduler_stream);
 
     // The split kernel does not support NVSHMEM because
@@ -1321,6 +1322,11 @@ extern "C" void launch_persistent_kernel() {
 
     cudaError_t err_worker = cudaStreamSynchronize(global_runtime_config.worker_stream);
     cudaError_t err_scheduler = cudaStreamSynchronize(global_runtime_config.scheduler_stream);
+    // auto end = std::chrono::high_resolution_clock::now();
+
+    // std::chrono::duration<double> duration = end - start;
+    // // std::cout << "time elapsed: " << duration.count() << " seconds" << std::endl;
+    // printf("time elapsed: %f seconds\n", duration.count());
     if (err_worker != cudaSuccess) {
       printf("CUDA kernel launch error: %s\n", cudaGetErrorString(err_worker));
     }
