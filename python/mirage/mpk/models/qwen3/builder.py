@@ -10,7 +10,7 @@ from ..utils import grid_for_rmsnorm_linear_layer, shuffle_tensors, inplace_shuf
 from ..graph_builder import GraphBuilder, MirageModelConfig
 from ...persistent_kernel import PersistentKernel
 from ...model_registry import register_model_builder
-from ....core import bfloat16, int64
+from ....core import bfloat16, int64, float32
 
 
 @register_model_builder("Qwen3", "Qwen/Qwen3-8B", "Qwen/Qwen3-1.7B", "Qwen/Qwen3-14B")
@@ -25,6 +25,8 @@ class Qwen3Builder(GraphBuilder):
         self.tokenizer = None
         self.model_name: str = None
         self.model_path: str = None
+        self.num_kv_cache_chunks = None
+        self.split_kv_cache = False
 
     def build_from_config(self, 
                               model_config: MirageModelConfig):
@@ -44,6 +46,7 @@ class Qwen3Builder(GraphBuilder):
         self.num_local_q_heads = model_config.local_num_q_heads
         self.num_local_kv_heads = model_config.local_num_kv_heads
         self.head_dim = model_config.head_dim
+        self.num_kv_cache_chunks = max(1, model_config.max_seq_length // 256)
         # self.fused_outdim_1 = (self.num_q_heads + 2 * self.num_kv_heads) * self.head_dim
         self.fused_outdim_1 = (self.num_local_q_heads + 2 * self.num_local_kv_heads) * self.head_dim
         self.fused_outdim_2 = 2 * self.intermediate_size
@@ -89,8 +92,9 @@ class Qwen3Builder(GraphBuilder):
         self.fused_outdim_2 = 2 * self.intermediate_size
         
         self.num_layers = len(self.model.model.layers)
-        print(f"build_from_model: Model name: {self.model_name}, num_layers: {self.num_layers}, hidden_size: {self.hidden_size}, intermediate_size: {self.intermediate_size}, vocab_size: {self.vocab_size}, num_q_heads: {self.num_q_heads}, num_kv_heads: {self.num_kv_heads}, num_local_q_heads: {self.num_local_q_heads}, num_local_kv_heads: {self.num_local_kv_heads}, head_dim: {self.head_dim}, fused_outdim_1: {self.fused_outdim_1}, fused_outdim_2: {self.fused_outdim_2}")
-        
+        self.num_kv_cache_chunks = max(1, self.mpk.max_seq_length // 256)
+        print(f"build_from_model: Model name: {self.model_name}, num_layers: {self.num_layers}, hidden_size: {self.hidden_size}, intermediate_size: {self.intermediate_size}, vocab_size: {self.vocab_size}, num_q_heads: {self.num_q_heads}, num_kv_heads: {self.num_kv_heads}, num_local_q_heads: {self.num_local_q_heads}, num_local_kv_heads: {self.num_local_kv_heads}, head_dim: {self.head_dim}, fused_outdim_1: {self.fused_outdim_1}, fused_outdim_2: {self.fused_outdim_2}, num_kv_cache_chunks: {self.num_kv_cache_chunks}")
+
         self.build_from_dict(self.model.state_dict(), True)
         
     def new_intermediate_tensors(self):
@@ -163,6 +167,21 @@ class Qwen3Builder(GraphBuilder):
                 name="attn_in",
                 io_category="cuda_tensor",
             )
+            if self.split_kv_cache:
+                self.lse = self.mpk.new_tensor(
+                    dims=(self.max_num_batched_tokens, self.num_kv_cache_chunks * self.num_local_q_heads // self.num_local_kv_heads, self.num_local_kv_heads),
+                    strides=(self.num_kv_cache_chunks * self.num_local_q_heads, 1, self.num_kv_cache_chunks * self.num_local_q_heads // self.num_local_kv_heads),
+                    dtype=float32,
+                    name="lse",
+                    io_category="cuda_tensor",
+                )
+                self.attn_out_tmp = self.mpk.new_tensor(
+                    dims=(self.max_num_batched_tokens, self.num_kv_cache_chunks * self.num_local_q_heads // self.num_local_kv_heads * self.head_dim, self.num_local_kv_heads),
+                    strides=(self.num_kv_cache_chunks * self.num_local_q_heads, 1, self.num_kv_cache_chunks * self.num_local_q_heads // self.num_local_kv_heads * self.head_dim),
+                    dtype=bfloat16,
+                    name="attn_out_tmp",
+                    io_category="cuda_tensor",
+                )
             self.attn_out = self.mpk.new_tensor(
                 dims=(self.max_num_batched_tokens, self.num_local_q_heads * self.head_dim),
                 dtype=bfloat16,
@@ -339,18 +358,43 @@ class Qwen3Builder(GraphBuilder):
             #         block_dim=(128, 1, 1),
             #     )
             # else:
-            self.mpk.paged_attention_layer(
-                input=self.attn_in,
-                k_cache=k_cache,
-                v_cache=v_cache,
-                q_norm=w_q_norm,
-                k_norm=w_k_norm,
-                cos_pos_embed=self.cos_pos_embed,
-                sin_pos_embed=self.sin_pos_embed,
-                output=self.attn_out,
-                grid_dim=(self.mpk.max_num_batched_requests, self.num_local_kv_heads, 1),
-                block_dim=(128, 1, 1),
-            )
+            if self.split_kv_cache:
+                self.mpk.paged_attention_split_kv_layer(
+                    input=self.attn_in,
+                    k_cache=k_cache,
+                    v_cache=v_cache,
+                    q_norm=w_q_norm,
+                    k_norm=w_k_norm,
+                    cos_pos_embed=self.cos_pos_embed,
+                    sin_pos_embed=self.sin_pos_embed,
+                    lse=self.lse,
+                    output=self.attn_out_tmp,
+                    attention_params=(self.num_local_q_heads, self.num_kv_cache_chunks),
+                    grid_dim=(self.mpk.max_num_batched_requests, self.num_local_kv_heads, self.num_kv_cache_chunks),
+                    block_dim=(128, 1, 1),
+                )
+
+                self.mpk.paged_attention_split_kv_merge_layer(
+                    lse=self.lse,
+                    output_tmp=self.attn_out_tmp,
+                    output=self.attn_out,
+                    attention_params=(self.num_local_q_heads, self.head_dim),
+                    grid_dim=(self.mpk.max_num_batched_requests, self.num_local_kv_heads, 1),
+                    block_dim=(128, 1, 1),
+                )
+            else:
+                self.mpk.paged_attention_layer(
+                    input=self.attn_in,
+                    k_cache=k_cache,
+                    v_cache=v_cache,
+                    q_norm=w_q_norm,
+                    k_norm=w_k_norm,
+                    cos_pos_embed=self.cos_pos_embed,
+                    sin_pos_embed=self.sin_pos_embed,
+                    output=self.attn_out,
+                    grid_dim=(self.mpk.max_num_batched_requests, self.num_local_kv_heads, 1),
+                    block_dim=(128, 1, 1),
+                )
             # add linear w/ residual
             self.w = self.mpk.attach_input(
                 torch_tensor=state_dict[f"{prefix}self_attn.o_proj.weight"], name=f"layer_{i}_o_proj"
