@@ -241,6 +241,7 @@ struct RuntimeConfig {
   int total_num_requests; // Metadata for LLM serving
 #endif
   void *profiler_buffer;
+  void *cpu_stream_buffer;
   bool split_worker_scheduler;
   cudaStream_t worker_stream, scheduler_stream;
 };

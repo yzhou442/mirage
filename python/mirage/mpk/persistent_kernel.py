@@ -18,14 +18,15 @@ HARD_CODE = """
 #include <cuda_runtime.h>
 
 static PyObject *init_func(PyObject *self, PyObject *args) {
-  PyObject *meta_list, *py_profiler_buffer;
+  PyObject *meta_list, *py_profiler_buffer, *py_cpu_stream_buffer;
   std::vector<void*> meta_tensors;
   int my_mpi_rank, num_workers, num_local_schedulers, num_remote_schedulers, max_seq_length, total_num_requests;
   int thread_id = -1;
   long long eos_token_id;
   void *profiler_buffer;
+  void *cpu_stream_buffer;
 
-  if (!PyArg_ParseTuple(args, "OOiiiiiiL|i", &meta_list, &py_profiler_buffer, &my_mpi_rank, &num_workers, &num_local_schedulers, &num_remote_schedulers, &max_seq_length, &total_num_requests, &eos_token_id, &thread_id)) {
+  if (!PyArg_ParseTuple(args, "OOOiiiiiiL|i", &meta_list, &py_profiler_buffer, &py_cpu_stream_buffer, &my_mpi_rank, &num_workers, &num_local_schedulers, &num_remote_schedulers, &max_seq_length, &total_num_requests, &eos_token_id, &thread_id)) {
     PyErr_SetString(PyExc_TypeError, "Invalid parameters");
     return NULL;
   }
@@ -47,8 +48,9 @@ static PyObject *init_func(PyObject *self, PyObject *args) {
     meta_tensors.push_back(PyLong_AsVoidPtr(item));
   }
   profiler_buffer = PyLong_AsVoidPtr(py_profiler_buffer);
+  cpu_stream_buffer = PyLong_AsVoidPtr(py_cpu_stream_buffer);
 
-  init_persistent_kernel(meta_tensors, profiler_buffer, my_mpi_rank, num_workers, num_local_schedulers, num_remote_schedulers, max_seq_length, total_num_requests, eos_token_id, thread_id);
+  init_persistent_kernel(meta_tensors, profiler_buffer, cpu_stream_buffer, my_mpi_rank, num_workers, num_local_schedulers, num_remote_schedulers, max_seq_length, total_num_requests, eos_token_id, thread_id);
 
   Py_RETURN_NONE;
 }
@@ -250,6 +252,7 @@ class PersistentKernel:
         eos_token_id: int64,
         meta_tensors: dict,
         profiler_tensor: torch.Tensor,
+        cpu_stream_buffer: torch.Tensor,
         trace_name: str,
         spec_decode_config: SpecDecodeConfig,
         use_cutlass_kernel: bool,
@@ -275,6 +278,7 @@ class PersistentKernel:
         self.kn_graph = KNGraph(CyKNGraph(disable_fingerprint=True))
         self.meta_tensors = meta_tensors
         self.profiler_tensor = profiler_tensor
+        self.cpu_stream_buffer = cpu_stream_buffer
         self.trace_name = trace_name
         self.use_nvshmem = True if world_size > 1 else False
         self.spec_decode_config = spec_decode_config
@@ -1132,9 +1136,15 @@ class PersistentKernel:
         profiler_buffer_ptr = (
             self.profiler_tensor.data_ptr() if self.profiler_tensor is not None else 0
         )
+        cpu_stream_buffer_ptr = (
+            self.cpu_stream_buffer.data_ptr()
+            if self.cpu_stream_buffer is not None
+            else 0
+        )
         self.init_func(
             meta_tensors_ptr,
             profiler_buffer_ptr,
+            cpu_stream_buffer_ptr,
             self.mpi_rank,
             self.num_workers,
             self.num_local_schedulers,

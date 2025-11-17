@@ -175,6 +175,8 @@ __device__ __forceinline__ bool
             step + j + 1 < config.max_seq_length) {
           config.tokens[request_id * MPK_MAX_SEQ_LENGTH + step + j + 1] =
               config.output_tokens[qo_indptr + j];
+          static_cast<uint64_t *>(config.cpu_stream_buffer)[step + j + 1 - prompt_len] =
+              config.output_tokens[qo_indptr + j];
         }
       }
       config.step[request_id] = step + num_tokens;
@@ -1064,6 +1066,7 @@ extern "C" void init_request_resources() {
 
 extern "C" void init_persistent_kernel(std::vector<void *> meta_tensors,
                                        void *profiler_buffer,
+                                       void *cpu_stream_buffer,
                                        int my_rank,
                                        int num_workers,
                                        int num_local_schedulers,
@@ -1094,6 +1097,7 @@ extern "C" void init_persistent_kernel(std::vector<void *> meta_tensors,
   global_runtime_config.max_seq_length = max_seq_length;
   global_runtime_config.eos_token_id = eos_token_id;
   global_runtime_config.profiler_buffer = profiler_buffer;
+  global_runtime_config.cpu_stream_buffer = cpu_stream_buffer;
   global_runtime_config.thread_id = thread_id;
   int num_schedulers = num_local_schedulers + num_remote_schedulers;
 

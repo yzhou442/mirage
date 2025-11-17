@@ -56,7 +56,9 @@ class MPKMetadata:
     # profiling
     profiling: bool = False
     profiler_tensor: Optional[torch.Tensor] = None
+    # stream buffer
     trace_name: Optional[str] = None
+    cpu_stream_buffer: Optional[torch.Tensor] = None
     # spec decode config
     spec_decode: Optional[str] = None
     spec_decode_config: Optional[object] = None
@@ -159,6 +161,7 @@ class MPK:
         self.paged_kv_last_page_len_buffer = args.paged_kv_last_page_len_buffer
         
         self.profiler_tensor = args.profiler_tensor
+        self.cpu_stream_buffer = args.cpu_stream_buffer
         self.spec_decode_config = args.spec_decode_config
         
         self.get_tensors()
@@ -189,7 +192,7 @@ class MPK:
             max_num_batched_tokens=self.max_num_batched_tokens,
             max_num_pages=args.max_num_pages,
             page_size=args.page_size,
-            eos_token_id=-1,
+            eos_token_id=151645,
             meta_tensors={
                 "step": self.step,
                 "tokens": self.tokens,
@@ -203,6 +206,7 @@ class MPK:
                 "paged_kv_last_page_len_buffer": self.paged_kv_last_page_len_buffer,
             },
             profiler_tensor=self.profiler_tensor,
+            cpu_stream_buffer=self.cpu_stream_buffer,
             trace_name=args.trace_name,
             spec_decode_config=self.spec_decode_config,
             use_cutlass_kernel=args.use_cutlass_kernel
@@ -222,6 +226,9 @@ class MPK:
         self.meta_tensors_ptr = [tensor.data_ptr() for tensor in meta_tensors]
         self.profiler_buffer_ptr = (
             self.persistent_kernel.profiler_tensor.data_ptr() if self.persistent_kernel.profiler_tensor is not None else 0
+        )
+        self.cpu_stream_buffer_ptr = (
+            self.persistent_kernel.cpu_stream_buffer.data_ptr() if self.persistent_kernel.cpu_stream_buffer is not None else 0
         )
 
         
@@ -349,6 +356,7 @@ class MPK:
         self.paged_kv_indptr_buffer.fill_(0)
         self.paged_kv_indices_buffer.fill_(0)
         self.paged_kv_last_page_len_buffer.fill_(0)
+        self.cpu_stream_buffer.fill_(-1)
         
     def print_buffers(self, logger = None):
         if logger is not None:
@@ -368,6 +376,7 @@ class MPK:
         self.persistent_kernel.init_func(
             self.meta_tensors_ptr,
             self.profiler_buffer_ptr,
+            self.cpu_stream_buffer_ptr,
             self.persistent_kernel.mpi_rank,
             self.persistent_kernel.num_workers,
             self.persistent_kernel.num_local_schedulers,

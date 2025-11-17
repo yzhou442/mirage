@@ -2,6 +2,7 @@ import argparse
 import threading
 import queue
 from typing import Callable, Optional, Tuple, Dict, Any
+from transformers import AutoTokenizer
 
 import torch
 import logging
@@ -34,8 +35,10 @@ class StageWorker(threading.Thread):
         # logging config
         log_dir: str,
         log_level: str,
+        cpu_stream_buffer: torch.Tensor = None,
         in_queue: "queue.Queue[Optional[Tuple[int, str]]]",
         out_queue: "queue.Queue[Optional[Tuple[int, str]]]",
+        stream_queue: "queue.Queue[Optional[Tuple[int, str]]]" = None,
         transform: Optional[Callable[[str], str]] = None,
     ) -> None:
         super().__init__(name=name)
@@ -56,7 +59,9 @@ class StageWorker(threading.Thread):
         # Queues and transform
         self.in_queue = in_queue
         self.out_queue = out_queue
+        self.stream_queue = stream_queue
         self.transform = transform
+        self.cpu_stream_buffer = cpu_stream_buffer
 
         # CUDA stream
         self.stream = torch.cuda.Stream()
@@ -162,6 +167,7 @@ class StageWorker(threading.Thread):
             model_config=mirage_model_config,
             profiling=self.profiling,
             profiler_tensor=self._profiler_tensor,
+            cpu_stream_buffer=self.cpu_stream_buffer,
             trace_name=self.trace_name,
             spec_decode=None,
             spec_decode_config=None,
@@ -192,26 +198,37 @@ class StageWorker(threading.Thread):
                 # Propagate termination downstream and exit.
                 self.logger.info("Shutdown signal received; forwarding and exiting")
                 self.out_queue.put(None)
+                if self.thread_id == 1:
+                    self.stream_queue.put(None)
                 self.in_queue.task_done()
                 break
 
             req_id, text = item
-            self.logger.info("recv req_id=%d input=%s", req_id, text)
+            # self.logger.info("recv req_id=%d input=%s", req_id, text)
             # prompt = self.transform(text) if self.transform else text
-            prompt = """
-            Give me a short introduction to large language model.
-            """
+            if self.thread_id == 0:
+                prompt = """
+                Please write a detailed explanation and implementation of the GeMM (General Matrix Multiplication) algorithm in CUDA.
+                """
+            else:
+                prompt = """
+                Can you write me a detailed GeMM kernel in CUDA and provide step by step explanation of the code?
+                """
 
-            print(f"Agent{self.thread_id} Dealing with req_id={req_id} input={text}")
+            # print(f"Agent{self.thread_id} Dealing with req_id={req_id} input={text}")
             self.logger.info(f"Agent{self.thread_id} Dealing with req_id={req_id} input")
             # with torch.cuda.stream(self.stream):
             self.logger.info(f"Agent{self.thread_id} Clearing buffers")
             self.mpk.clear_buffers()
+            if self.thread_id == 1:
+                self.stream_queue.put((req_id, ""))  # signal stream worker to start    
             self.logger.info(f"Agent{self.thread_id} Loading new request")
             self.mpk.load_new_request(prompt)
             self.logger.info(f"Agent{self.thread_id} Initializing request function")
             self.mpk.init_request_func()
             self.logger.info(f"Agent{self.thread_id} Running MPK")
+            if req_id == 0 and self.thread_id == 0:
+                input("Press Enter to start MPK...")
             self.mpk(logger=self.logger)
             self.logger.info(f"Agent{self.thread_id} MPK finished")
 
@@ -219,26 +236,52 @@ class StageWorker(threading.Thread):
             # self.stream.synchronize()
             # self.logger.info(f"Agent{self.thread_id} Stream synchronized")
 
-            # Decode the single-request result
-            try:
-                cur_step = int(self.step[0].item())
-                generated_ids = self.tokens[0, : cur_step + 1]
-                output = self.mpk.decode(generated_ids)
-            except Exception as e:
-                self.logger.error(f"Error decoding output: {e}, cur_step: {cur_step}, generated_ids: {generated_ids}")
-                output = ""
+            # # Decode the single-request result
+            # try:
+            #     cur_step = int(self.step[0].item())
+            #     generated_ids = self.tokens[0, : cur_step + 1]
+            #     output = self.mpk.decode(generated_ids)
+            # except Exception as e:
+            #     self.logger.error(f"Error decoding output: {e}, cur_step: {cur_step}, generated_ids: {generated_ids}")
+            #     output = ""
             
-            try:
-                output = output.split("</think>")[1].strip()
-            except IndexError:
-                # warn
-                self.logger.warning("No </think> found in output")
-                output = output
+            # try:
+            #     output = output.split("</think>")[1].strip()
+            # except IndexError:
+            #     # warn
+            #     self.logger.warning("No </think> found in output")
+            #     output = output
 
-            self.logger.info(f"send req_id={req_id} time={self.timing_from_start()} ms, output:{output}")
-            self.out_queue.put((req_id, output))
+            # self.logger.info(f"send req_id={req_id} time={self.timing_from_start()} ms, output:{output}")
+            self.out_queue.put((req_id, ""))
             self.in_queue.task_done()
         self.logger.info("worker stopped")
+
+
+def stream_output(cpu_stream_buffer: torch.Tensor, tokenizer, in_queue: queue.Queue) -> None:
+    request_idx = 0
+    while True:
+        item = in_queue.get()
+        if item is None:
+            print(f"Streaming worker received shutdown signal; exiting")
+            in_queue.task_done()
+            break
+        request_idx, _ = item
+        print(f"Streaming output tokens for request {request_idx}:")
+        for token_idx in range(300):
+            token = cpu_stream_buffer[token_idx].item()
+            count_iter = 0
+            while token == -1:
+                time.sleep(0.01)
+                token = cpu_stream_buffer[token_idx].item()
+                count_iter += 1
+                if count_iter > 500:  # timeout after 5 seconds
+                    print("\nStreaming timeout.")
+                    return
+            if token == tokenizer.eos_token_id:
+                break
+            print(tokenizer.decode([token]), end="", flush=True)
+        print(f"\nEnd of streamed output for request {request_idx}.")
 
 
 def main() -> None:
@@ -259,7 +302,7 @@ def main() -> None:
         default=True,
         help="Disable cutlass kernel variant",
     )
-    parser.add_argument("--num-requests", type=int, default=9)
+    parser.add_argument("--num-requests", type=int, default=16)
     parser.add_argument("--log-dir", type=str, default="./logs", help="Directory to store per-worker logs")
     parser.add_argument(
         "--log-level",
@@ -278,26 +321,30 @@ def main() -> None:
 
     # Stage transforms
     def tfm1(text: str) -> str:
-        return f"[Agent1 指令]\n{text}\n请简明扼要回答。"
+        return f""
 
     def tfm2(text: str) -> str:
-        return f"[Agent2 任务]\n请对下述内容进行要点总结：\n{text}"
+        return f""
 
     def tfm3(text: str) -> str:
-        return f"[Agent3 任务]\n依据以下内容提取3个关键词，只返回关键词，不要返回任何其他解释：\n{text}"
+        return f""
     
     tfs = [tfm1, tfm2, tfm3]
 
     # max_sm_num = 36
     max_sm_num = 40
     
-    models = ["Qwen/Qwen3-8B", "Qwen/Qwen3-1.7B"]
-    num_workers = [64, 16]
+    models = ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-8B"]
+    num_workers = [16, 64]
     num_schedulers = [8, 8]
     queues = [queue.Queue(maxsize=8) for _ in range(len(models) + 1)]
+    stream_queues = [queue.Queue(maxsize=8) for _ in range(len(models))]
     kwargs_list = []
     workers = []
+    stream_workers = []
+    cpu_stream_buffer_list = [torch.full((args.max_seq_length, ), -1, dtype=torch.long, pin_memory=True, device="cpu") for _ in range(len(models))]
     # Workers (each owns its MPK and tensors)
+    tokenizer = AutoTokenizer.from_pretrained(models[0])
     for i in range(len(models)):
         kwargs = dict(
             thread_id=i,
@@ -316,16 +363,22 @@ def main() -> None:
             num_schedulers=num_schedulers[i],
             log_dir=args.log_dir,
             log_level=args.log_level,
+            cpu_stream_buffer=cpu_stream_buffer_list[i],
         )
         # kwargs_list.append(kwargs)
-        w = StageWorker(name=f"Stage-{i+1}", in_queue=queues[i], out_queue=queues[i+1], transform=tfs[i], **kwargs)
+        w = StageWorker(name=f"Stage-{i+1}", in_queue=queues[i], out_queue=queues[i+1], stream_queue=stream_queues[i], transform=tfs[i], **kwargs)
         workers.append(w)
+        if i == 1:
+            stream_w = threading.Thread(target=stream_output, args=(cpu_stream_buffer_list[i], tokenizer, stream_queues[i]), name=f"Stream-Stage-{i+1}")
+            stream_workers.append(stream_w)
     # w1 = StageWorker(name="Stage-1", in_queue=q_in, out_queue=q_12, transform=tfm1, **common_kwargs)
     # w2 = StageWorker(name="Stage-2", in_queue=q_12, out_queue=q_23, transform=tfm2, **common_kwargs)
     # w3 = StageWorker(name="Stage-3", in_queue=q_23, out_queue=q_out, transform=tfm3, **common_kwargs)
 
     for w in workers:
         w.start()
+    for sw in stream_workers:
+        sw.start()
         
     q_in = queues[0]
     q_out = queues[-1]
@@ -354,12 +407,13 @@ def main() -> None:
     # Drain and join
     for w in workers:
         w.join()
-
-    # Print ordered outputs
-    for i in range(args.num_requests):
-        out_text = results.get(i, "<missing>")
-        print(f"===== Request {i} =====")
-        print(out_text)
+    for sw in stream_workers:
+        sw.join()
+    # # Print ordered outputs
+    # for i in range(args.num_requests):
+    #     out_text = results.get(i, "<missing>")
+    #     print(f"===== Request {i} =====")
+    #     print(out_text)
 
 
 if __name__ == "__main__":
