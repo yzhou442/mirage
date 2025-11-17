@@ -190,7 +190,6 @@ class StageWorker(threading.Thread):
 
     def run(self) -> None:
         self.logger.info(f"Worker [{self.name}] started")
-        self.logger.info(f"Time taken from start: {self.timing_from_start()} ms")
         while True:
             time.sleep(0.001)  # Prevent busy waiting
             item = self.in_queue.get()
@@ -220,8 +219,8 @@ class StageWorker(threading.Thread):
             # with torch.cuda.stream(self.stream):
             self.logger.info(f"Agent{self.thread_id} Clearing buffers")
             self.mpk.clear_buffers()
-            if self.thread_id == 1:
-                self.stream_queue.put((req_id, ""))  # signal stream worker to start    
+            # if self.thread_id == 1:
+            #     self.stream_queue.put((req_id, ""))  # signal stream worker to start    
             self.logger.info(f"Agent{self.thread_id} Loading new request")
             self.mpk.load_new_request(prompt)
             self.logger.info(f"Agent{self.thread_id} Initializing request function")
@@ -229,7 +228,9 @@ class StageWorker(threading.Thread):
             self.logger.info(f"Agent{self.thread_id} Running MPK")
             if req_id == 0 and self.thread_id == 0:
                 input("Press Enter to start MPK...")
+            # start_time = time.time()
             self.mpk(logger=self.logger)
+            # time_elapsed = time.time() - start_time
             self.logger.info(f"Agent{self.thread_id} MPK finished")
 
             # Ensure this request finished on this stage's stream
@@ -253,6 +254,7 @@ class StageWorker(threading.Thread):
             #     output = output
 
             # self.logger.info(f"send req_id={req_id} time={self.timing_from_start()} ms, output:{output}")
+            # print(self.step, self._prompt_lengths, time_elapsed)
             self.out_queue.put((req_id, ""))
             self.in_queue.task_done()
         self.logger.info("worker stopped")
@@ -261,27 +263,28 @@ class StageWorker(threading.Thread):
 def stream_output(cpu_stream_buffer: torch.Tensor, tokenizer, in_queue: queue.Queue) -> None:
     request_idx = 0
     while True:
-        item = in_queue.get()
-        if item is None:
-            print(f"Streaming worker received shutdown signal; exiting")
-            in_queue.task_done()
-            break
-        request_idx, _ = item
+        # item = in_queue.get()
+        # if item is None:
+        #     print(f"Streaming worker received shutdown signal; exiting")
+        #     in_queue.task_done()
+        #     break
+        # request_idx, _ = item
         print(f"Streaming output tokens for request {request_idx}:")
-        for token_idx in range(300):
+        for token_idx in range(cpu_stream_buffer.size(0)-55):
             token = cpu_stream_buffer[token_idx].item()
             count_iter = 0
             while token == -1:
                 time.sleep(0.01)
                 token = cpu_stream_buffer[token_idx].item()
-                count_iter += 1
-                if count_iter > 500:  # timeout after 5 seconds
-                    print("\nStreaming timeout.")
-                    return
+                # count_iter += 1
+                # if count_iter > 500:  # timeout after 5 seconds
+                #     print("\nStreaming timeout.")
+                #     return
             if token == tokenizer.eos_token_id:
                 break
             print(tokenizer.decode([token]), end="", flush=True)
         print(f"\nEnd of streamed output for request {request_idx}.")
+        break
 
 
 def main() -> None:
@@ -302,7 +305,7 @@ def main() -> None:
         default=True,
         help="Disable cutlass kernel variant",
     )
-    parser.add_argument("--num-requests", type=int, default=16)
+    parser.add_argument("--num-requests", type=int, default=5)
     parser.add_argument("--log-dir", type=str, default="./logs", help="Directory to store per-worker logs")
     parser.add_argument(
         "--log-level",
