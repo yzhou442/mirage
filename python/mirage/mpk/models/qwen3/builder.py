@@ -26,7 +26,7 @@ class Qwen3Builder(GraphBuilder):
         self.model_name: str = None
         self.model_path: str = None
         self.num_kv_cache_chunks = None
-        self.split_kv_cache = False
+        self.split_kv_cache = True
 
     def build_from_config(self, 
                               model_config: MirageModelConfig):
