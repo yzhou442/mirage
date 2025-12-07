@@ -38,7 +38,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-num-batched-requests", default=1, type=int, help="Max number of requests in a batch")
     parser.add_argument("--page-size", default=4096, type=int, help="Page size")
     parser.add_argument("--max-num-pages", default=16, type=int, help="Max num pages")
-    parser.add_argument("--output-dir", help="Output files directory")
+    parser.add_argument("--output-dir", default="output", help="Output files directory")
     parser.add_argument("--trace-name", default="qwen3", help="Perfetto trace output name")
     parser.add_argument(
         "--profiling", action="store_true", help="Use Profiler to generate trace"
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--max-seq-length",
-        default=1024,
+        default=1,
         type=int,
         help="Max sequence length for lookahead spec decode",
     )
@@ -149,10 +149,10 @@ if __name__ == "__main__":
         messages, tokenize=False, add_generation_prompt=True
     )
     model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-    for r in range(total_num_requests):
-        for i in range(model_inputs.input_ids.shape[-1]):
-            tokens[r, i] = model_inputs.input_ids[0, i]
-    prompt_lengths = torch.full((total_num_requests,), model_inputs.input_ids.shape[-1], dtype=torch.int, device="cuda")
+    # for r in range(total_num_requests):
+    #     for i in range(model_inputs.input_ids.shape[-1]):
+            # tokens[r, i] = model_inputs.input_ids[0, i]
+    prompt_lengths = torch.full((total_num_requests,), 8, dtype=torch.int, device="cuda")
     positions = torch.arange(32768).unsqueeze(0).to(model.device)
     position_embeddings = model.model.rotary_emb(positions)
 
@@ -247,134 +247,32 @@ if __name__ == "__main__":
             use_cutlass_kernel=False,
         )
         
-        if spec_decode_config and spec_decode_config.method == "promptlookup":
-            all_tokens = mpk.attach_input(torch_tensor=tokens, name="all_tokens")
-            num_tokens_extend = spec_decode_config.spec_length + 1
-        else:
-            num_tokens_extend = 1
+        # x_torch = torch.full((8, 4096), 0.5, dtype=torch.bfloat16, device="cuda")
+        # w_torch = torch.full((4096, 4096), 0.1, dtype=torch.bfloat16, device="cuda")
+        # attn_out_torch = torch.full((8, 4096), 0.1, dtype=torch.bfloat16, device="cuda")
+        # attn_proj_out_torch = torch.full((8, 4096), 0.0, dtype=torch.bfloat16, device="cuda")
 
-        num_kv_cache_chunks = args.max_seq_length // 256
-        # x = mpk.attach_input(torch_tensor=input_tokens, name="input_token")
-        # x_torch = torch.full((8, 4096), 0.1, dtype=torch.bfloat16, device="cuda")
-        # x_torch = torch.arange(8 * 4096, dtype=torch.bfloat16, device="cuda").reshape(8, 4096).reshape(8, 4096)
         x_torch = torch.randn((8, 4096), dtype=torch.bfloat16, device="cuda")
-        w_qkv_torch = torch.randn((6144, 4096), dtype=torch.bfloat16, device="cuda")
-
-        attn_in_torch = torch.randn((8, 6144), dtype=torch.bfloat16, device="cuda")
-        # attn_in_torch = torch.full((8, 6144), 0.1, dtype=torch.bfloat16, device="cuda")
-        # w_qkv_torch = 0.1 * torch.arange(6144 * 4096, dtype=torch.bfloat16, device="cuda").reshape(6144, 4096)
-        
-        w_q_norm_torch = torch.randn((128,), dtype=torch.bfloat16, device="cuda")
-        w_k_norm_torch = torch.randn((128,), dtype=torch.bfloat16, device="cuda")
-
-        k_cache_torch = torch.randn((16, 4096, 8, 128), dtype=torch.bfloat16, device="cuda") # (max_num_pages, page_size, num_local_kv_heads, head_dim)
-        v_cache_torch = torch.randn((16, 4096, 8, 128), dtype=torch.bfloat16, device="cuda") # (max_num_pages, page_size, num_local_kv_heads, head_dim)
-        # k_cache_torch = torch.full((16, 4096, 8, 128), 0.2, dtype=torch.bfloat16, device="cuda")
-        # v_cache_torch = torch.full((16, 4096, 8, 128), 0.2, dtype=torch.bfloat16, device="cuda")
-
-        cos_pos_embed_torch = torch.randn((4096, 128), dtype=torch.bfloat16, device="cuda")
-        sin_pos_embed_torch = torch.randn((4096, 128), dtype=torch.bfloat16, device="cuda")
-        attn_out_torch = torch.zeros(8, 4096, dtype=torch.bfloat16, device="cuda")
-        # lse_torch = torch.zeros(8, num_kv_cache_chunks, 32, dtype=torch.float32, device="cuda")
-        attn_out_tmp_torch = torch.zeros(8, num_kv_cache_chunks, 32 * 128, dtype=torch.bfloat16, device="cuda")
-        # lse = mpk.new_tensor(
-        #     dims=(args.max_num_batched_tokens, num_kv_cache_chunks, num_local_q_heads),
-        #     dtype=mi.float32,
-        #     name="lse",
-        #     io_category="cuda_tensor",
-        # )
-        # attn_out_tmp = mpk.new_tensor(
-        #     dims=(args.max_num_batched_tokens, num_kv_cache_chunks, num_local_q_heads * head_dim),
-        #     dtype=mi.bfloat16,
-        #     name="attn_out_tmp",
-        #     io_category="cuda_tensor",
-        # )
-        attn_out_torch = torch.zeros(8, 32 * 128, dtype=torch.bfloat16, device="cuda")
-        attn_out = mpk.attach_input(torch_tensor=attn_out_torch, name="attn_out")
+        w_torch = torch.randn((4096, 4096), dtype=torch.bfloat16, device="cuda")
+        attn_out_torch = torch.randn((8, 4096), dtype=torch.bfloat16, device="cuda")
+        attn_proj_out_torch = torch.randn((8, 4096), dtype=torch.bfloat16, device="cuda")
 
         x = mpk.attach_input(torch_tensor=x_torch, name="input_x")
-        attn_in = mpk.attach_input(torch_tensor=attn_in_torch, name="attn_in")
-        w_qkv = mpk.attach_input(torch_tensor=w_qkv_torch, name="layer_0_qkv_proj")
-        
-        w_q_norm = mpk.attach_input(torch_tensor=w_q_norm_torch, name="layer_0_q_norm")
-        w_k_norm = mpk.attach_input(torch_tensor=w_k_norm_torch, name="layer_0_k_norm")
-        k_cache = mpk.attach_input(torch_tensor=k_cache_torch, name="layer_0_k_cache")
-        v_cache = mpk.attach_input(torch_tensor=v_cache_torch, name="layer_0_v_cache")
-        cos_pos_embed = mpk.attach_input(
-            torch_tensor=cos_pos_embed_torch,
-            name="cos_position_embedding",
-        )
-        sin_pos_embed = mpk.attach_input(
-            torch_tensor=sin_pos_embed_torch,
-            name="sin_position_embedding",
-        )
-        # lse = mpk.attach_input(torch_tensor=lse_torch, name="lse")
-        lse = mpk.new_tensor(
-            dims=(args.max_num_batched_tokens, num_kv_cache_chunks * num_local_q_heads // num_local_kv_heads, num_local_kv_heads),
-            strides=(num_kv_cache_chunks * num_local_q_heads, 1, num_kv_cache_chunks * num_local_q_heads // num_local_kv_heads),
-            dtype=mi.float32,
-            name="lse",
-            io_category="cuda_tensor",
-        )
-        # attn_out_tmp = mpk.attach_input(torch_tensor=attn_out_tmp_torch, name="attn_out_tmp")
-        attn_out_tmp = mpk.new_tensor(
-            dims=(args.max_num_batched_tokens, num_kv_cache_chunks * num_local_q_heads // num_local_kv_heads * head_dim, num_local_kv_heads),
-            strides=(num_kv_cache_chunks * num_local_q_heads, 1, num_kv_cache_chunks * num_local_q_heads // num_local_kv_heads * head_dim),
-            dtype=mi.bfloat16,
-            name="attn_out_tmp",
-            io_category="cuda_tensor",
-        )
-        # mpk.linear_layer(
-        #     input=x,
-        #     weight=w_qkv,
-        #     output=attn_in,
-        #     # grid_dim=(96, 1, 1),
-        #     # grid_dim=(128, 1, 1),
-        #     grid_dim=(64, 1, 1),
-        #     block_dim=(128, 1, 1),
-        # )
+        w = mpk.attach_input(torch_tensor=w_torch, name="layer_0_qkv_proj")
+        attn_out = mpk.attach_input(torch_tensor=attn_out_torch, name="layer_0_attn_out")
+        attn_proj_out = mpk.attach_input(torch_tensor=attn_proj_out_torch, name="layer_0_attn_proj_out")
 
-        # mpk.paged_attention_layer(
-        #     input=attn_in,
-        #     k_cache=k_cache,
-        #     v_cache=v_cache,
-        #     q_norm=w_q_norm,
-        #     k_norm=w_k_norm,
-        #     cos_pos_embed=cos_pos_embed,
-        #     sin_pos_embed=sin_pos_embed,
-        #     output=attn_out,
-        #     grid_dim=(mpk.max_num_batched_requests, num_local_kv_heads, 1),
-        #     block_dim=(128, 1, 1),
-        # )
-
-        mpk.paged_attention_split_kv_layer(
-            input=attn_in,
-            k_cache=k_cache,
-            v_cache=v_cache,
-            q_norm=w_q_norm,
-            k_norm=w_k_norm,
-            cos_pos_embed=cos_pos_embed,
-            sin_pos_embed=sin_pos_embed,
-            lse=lse,
-            output=attn_out_tmp,
-            grid_dim=(mpk.max_num_batched_requests, num_local_kv_heads, num_kv_cache_chunks),
-            block_dim=(128, 1, 1),
+        attn_proj_out = x
+        mpk.splitk_linear_layer(
+            input=attn_out,
+            weight=w,
+            output=attn_proj_out,
+            grid_dim=(64, 1, 1),
+            block_dim=(256, 1, 1),
         )
 
-        mpk.paged_attention_split_kv_merge_layer(
-            lse=lse,
-            output_tmp=attn_out_tmp,
-            output=attn_out,
-            grid_dim=(mpk.max_num_batched_requests, num_local_kv_heads, 1),
-            block_dim=(128, 1, 1),
-        )
-
-            # print("lse data ptr is: ", hex(lse_torch.data_ptr()))
-            # print("attn_out_tmp data ptr is: ", hex(attn_out_tmp_torch.data_ptr()))
-            # print("attn_out data ptr is: ", hex(attn_out_torch.data_ptr()))
-
-
-            
+        print("id(x):", id(x))
+        print("id(attn_proj_out):", id(attn_proj_out))
 
         results = mpk.kn_graph.generate_task_graph(num_gpus=world_size, my_gpu_id=rank)
         with open(f"task_graph_{rank}.json", "w") as f:
@@ -423,63 +321,25 @@ if __name__ == "__main__":
             use_cutlass_kernel=False
         )
 
-                # x = mpk.attach_input(torch_tensor=input_tokens, name="input_token")
-        # x_torch = torch.full((8, 4096), 0.1, dtype=torch.bfloat16, device="cuda")
         x_torch_2 = x_torch.clone()
-        # x_torch = torch.randn((8, 4096), dtype=torch.bfloat16, device="cuda")
-        w_qkv_torch_2 = w_qkv_torch.clone()
-        attn_in_torch_2 = attn_in_torch.clone()
-        # w_qkv_torch = 0.1 * torch.arange(6144 * 4096, dtype=torch.bfloat16, device="cuda").reshape(6144, 4096)
-        
-        w_q_norm_torch_2 = w_q_norm_torch.clone()
-        w_k_norm_torch_2 = w_k_norm_torch.clone()
-        k_cache_torch_2 = k_cache_torch.clone()
-        v_cache_torch_2 = v_cache_torch.clone()
-        cos_pos_embed_torch_2 = cos_pos_embed_torch.clone()
-        sin_pos_embed_torch_2 = sin_pos_embed_torch.clone()
+        w_torch_2 = w_torch.clone()
         attn_out_torch_2 = attn_out_torch.clone()
+        attn_proj_out_torch_2 = attn_proj_out_torch.clone()
 
-        x_2 = mpk2.attach_input(torch_tensor=x_torch_2, name="input_x")
-        attn_in_2 = mpk2.attach_input(torch_tensor=attn_in_torch_2, name="attn_in")
-        w_qkv_2 = mpk2.attach_input(torch_tensor=w_qkv_torch_2, name="layer_0_qkv_proj")
-        
-        w_q_norm_2 = mpk2.attach_input(torch_tensor=w_q_norm_torch_2, name="layer_0_q_norm")
-        w_k_norm_2 = mpk2.attach_input(torch_tensor=w_k_norm_torch_2, name="layer_0_k_norm")
-        k_cache_2 = mpk2.attach_input(torch_tensor=k_cache_torch_2, name="layer_0_k_cache")
-        v_cache_2 = mpk2.attach_input(torch_tensor=v_cache_torch_2, name="layer_0_v_cache")
-        cos_pos_embed_2 = mpk2.attach_input(
-            torch_tensor=cos_pos_embed_torch_2,
-            name="cos_position_embedding",
+        x_2 = mpk2.attach_input(torch_tensor=x_torch_2, name="input_x_2")
+        w_2 = mpk2.attach_input(torch_tensor=w_torch_2, name="layer_0_qkv_proj_2")
+        attn_out_2 = mpk2.attach_input(torch_tensor=attn_out_torch_2, name="layer_0_attn_out_2")
+        attn_proj_out_2 = mpk2.attach_input(torch_tensor=attn_proj_out_torch_2, name="layer_0_attn_proj_out_2")
+
+        mpk2.linear_with_residual_layer(
+            input=attn_out_2,
+            weight=w_2,
+            residual=x_2,
+            output=attn_proj_out_2,
+            grid_dim=(1, 1, 1),
+            block_dim=(256, 1, 1),
         )
-        sin_pos_embed_2 = mpk2.attach_input(
-            torch_tensor=sin_pos_embed_torch_2,
-            name="sin_position_embedding",
-        )
-        attn_out_2 = mpk2.attach_input(torch_tensor=attn_out_torch_2, name="layer_0_attn_out")
-
-        # mpk2.linear_layer(
-        #     input=x_2,
-        #     weight=w_qkv_2,
-        #     output=attn_in_2,
-        #     grid_dim=(96, 1, 1),
-        #     # grid_dim=(128, 1, 1),
-        #     block_dim=(128, 1, 1),
-        # )
-
-        mpk2.paged_attention_layer(
-            input=attn_in_2,
-            k_cache=k_cache_2,
-            v_cache=v_cache_2,
-            q_norm=w_q_norm_2,
-            k_norm=w_k_norm_2,
-            cos_pos_embed=cos_pos_embed_2,
-            sin_pos_embed=sin_pos_embed_2,
-            output=attn_out_2,
-            grid_dim=(mpk2.max_num_batched_requests, num_local_kv_heads, 1),
-            block_dim=(128, 1, 1),
-        )
-
-        mpk2.compile(output_dir=args.output_dir + "_96")
+        mpk2.compile(output_dir=args.output_dir + "_2")
 
     starter.record()
     mpk()
@@ -493,31 +353,21 @@ if __name__ == "__main__":
     torch.cuda.synchronize()
     run_time_96 = starter.elapsed_time(ender)
 
-    print("linear layer close?", torch.allclose(attn_in_torch, attn_in_torch_2, rtol=1e-2, atol=1e-2))
-    print("paged attention layer close?", torch.allclose(attn_out_torch, attn_out_torch_2, rtol=1e-2, atol=1e-2))
+    close_flag = torch.allclose(x_torch, attn_proj_out_torch_2, rtol=1e-2, atol=1e-2)
+    print("close check:", close_flag)
 
-    print("shape of attn_out_torch:")
-    print(attn_out_torch.shape)
-    # print(out_ref.shape)
-    # print(attn_out_torch[0])
-    # print(out_ref[0])
-    print("first 10 elements of attn_in_torch:")
-    print(attn_in_torch[0][:10])
-    print("first 10 elements of attn_in_torch_2:")
-    print(attn_in_torch_2[0][:10])
-    print("first 10 elements of attn_out_torch:")
-    print(attn_out_torch[0][:10])
-    print("first 10 elements of attn_out_torch_2:")
-    print(attn_out_torch_2[0][:10])
-    # print("first 10 elements of lse_torch chunk 0:")
-    # print(lse_torch[0][0][:10])
-    # print("first 10 elements of lse_torch chunk 1:")
-    # print(lse_torch[0][1][:10])
+    print("first 10 elements of attn_proj_out_torch:")
+    print(attn_proj_out_torch[0][:10])
+    print("first 10 elements of x_torch:")
+    print(x_torch[0][:10])
 
-    # print("first 10 elements of attn_out_tmp_torch chunk 0:")
-    # print(attn_out_tmp_torch[0][0][:10])
-    # print("first 10 elements of attn_out_tmp_torch chunk 1:")
-    # print(attn_out_tmp_torch[0][1][:10])
+    print("x_torch is attn_proj_out_torch?", x_torch is attn_proj_out_torch)
+    print("first 10 elements of attn_proj_out_torch_2:")
+    print(attn_proj_out_torch_2[0][:10])
+
+    # print("all elements of x:")
+    # print(x_torch)
+
 
 
     if world_size > 1:

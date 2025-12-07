@@ -523,14 +523,22 @@ if __name__ == "__main__":
             w = mpk.attach_input(
                 torch_tensor=layer.self_attn.o_proj.weight, name=f"layer_{i}_o_proj"
             )
-            mpk.linear_with_residual_layer(
+            attn_proj_out = x
+            mpk.splitk_linear_layer(
                 input=attn_out,
                 weight=w,
-                residual=x,
                 output=attn_proj_out,
                 grid_dim=(grid_for_linear_layer(w.dim(0), with_residual=True), 1, 1),
                 block_dim=(256, 1, 1),
             )
+            # mpk.linear_with_residual_layer(
+            #     input=attn_out,
+            #     weight=w,
+            #     residual=x,
+            #     output=attn_proj_out,
+            #     grid_dim=(grid_for_linear_layer(w.dim(0), with_residual=True), 1, 1),
+            #     block_dim=(256, 1, 1),
+            # )
             # reset residual input as x
             x = attn_proj_out
             # add allreduce if needed
@@ -585,14 +593,22 @@ if __name__ == "__main__":
             w = mpk.attach_input(
                 torch_tensor=layer.mlp.down_proj.weight, name=f"layer_{i}_down_proj"
             )
-            mpk.linear_with_residual_layer(
+            mlp_out = x
+            mpk.splitk_linear_layer(
                 input=silu_mul_out,
                 weight=w,
-                residual=x,
                 output=mlp_out,
                 grid_dim=(grid_for_linear_layer(w.dim(0), with_residual=True), 1, 1),
                 block_dim=(256, 1, 1),
             )
+            # mpk.linear_with_residual_layer(
+            #     input=silu_mul_out,
+            #     weight=w,
+            #     residual=x,
+            #     output=mlp_out,
+            #     grid_dim=(grid_for_linear_layer(w.dim(0), with_residual=True), 1, 1),
+            #     block_dim=(256, 1, 1),
+            # )
             # reset residual input as x
             x = mlp_out
             if world_size > 1:

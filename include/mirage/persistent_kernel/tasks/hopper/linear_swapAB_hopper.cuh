@@ -81,6 +81,10 @@ __device__ __forceinline__ void
       (OUTPUT_SIZE + OUTPUT_ATOM_SIZE - 1) / OUTPUT_ATOM_SIZE;
   constexpr int NUM_ITER_K = (REDUCTION_SIZE + TILE_SIZE - 1) / TILE_SIZE;
 
+  if (threadIdx.x == 0) {
+    printf("blockIdx.x: %d, threadIdx.x: %d, BATCH_SIZE: %d, OUTPUT_SIZE: %d, REDUCTION_SIZE: %d, Kstages: %d, num_iter_n: %d, num_iter_k: %d, tile_size: %d, output_atom_size: %d\n", blockIdx.x, threadIdx.x, BATCH_SIZE, OUTPUT_SIZE, REDUCTION_SIZE, Kstages, NUM_ITER_N, NUM_ITER_K, TILE_SIZE, OUTPUT_ATOM_SIZE);
+  }
+
   constexpr int B = 3;
   constexpr int M = 3;
   constexpr int S = 3;
@@ -279,9 +283,9 @@ __device__ __forceinline__ void
       wg_sync<THREADS_PER_WARPGROUP * CONSUMER_WARPGROUPS>(1);
 
 #pragma unroll 1
-      for (int i = 0; i < NUM_ITER_K; i++) {
-        int slot = (output_atom_idx * NUM_ITER_K + i) % Kstages;
-        int phase = ((output_atom_idx * NUM_ITER_K + i) / Kstages) & 1;
+      for (int k_tile = 0; k_tile < NUM_ITER_K; k_tile++) {
+        int slot = (output_atom_idx * NUM_ITER_K + k_tile) % Kstages;
+        int phase = ((output_atom_idx * NUM_ITER_K + k_tile) / Kstages) & 1;
         // wait input, weight
         wait(input_barrier[slot], phase);
         wait(weight_barrier[slot], phase);
@@ -289,6 +293,9 @@ __device__ __forceinline__ void
         input_weight_smem.set_ptr(shared_weight +
                                   (slot)*OUTPUT_ATOM_SIZE * TILE_SIZE);
         input_smem.set_ptr(shared_input + (slot)*SMEM_M_SIZE * TILE_SIZE);
+        // if (threadIdx.x == 0) {
+        //   printf("input_smem[0]: %f, input_weight_smem[0]: %f, k_tile: %d, n_tile: %d\n", (float)input_smem.at(0, 0), (float)input_weight_smem.at(0, 0), k_tile, output_atom_idx);
+        // }
         A_DESC a_desc(input_weight_smem(0, 0));
         B_DESC b_desc(input_smem(0, 0));
         wgmma::warpgroup_fence_fragment(s_frag);
@@ -357,6 +364,12 @@ __device__ __forceinline__ void
         //                         {output_atom_idx * OUTPUT_ATOM_SIZE, 0});
 
         if constexpr (SplitK) {
+          // printf("first 10 elements of mm_output_smem:\n");
+          // for (int i = 0; i < 10; i++) {
+          //   printf("%f ", (float)mm_output_smem.at(0, i));
+          // }
+          // printf("\n");
+
           tma_out.tma_reduce_add_async(mm_output_smem(0, 0),
                                        {output_atom_idx * OUTPUT_ATOM_SIZE, 0});
         } else {
@@ -368,6 +381,7 @@ __device__ __forceinline__ void
         if constexpr (HAS_RESIDUAL) {
           arrive(residual_done[slot_residual], 1);
         }
+        store_async_wait<Kstages - 1>();
       }
     }
     store_async_wait<0>();
