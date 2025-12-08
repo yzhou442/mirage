@@ -75,7 +75,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--max-seq-length",
-        default=512,
+        default=2,
         type=int,
         help="Max sequence length for lookahead spec decode",
     )
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     # get all model weight tensors
     tokens = torch.full((total_num_requests, args.max_seq_length), 0, dtype=torch.long, device="cuda")
 
-    prompt = "Give me a short introduction to large language model."
+    prompt = "Hi"
     # This prompt is copied from https://github.com/apoorvumang/prompt-lookup-decoding/blob/main/demo-pld.ipynb
     code_text = """import numpy as np
                 import matplotlib.pyplot as plt
@@ -170,10 +170,10 @@ if __name__ == "__main__":
         },
         {"role": "user", "content": prompt},
     ]
-    text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    # text = tokenizer.apply_chat_template(
+    #     messages, tokenize=False, add_generation_prompt=True
+    # )
+    model_inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
     for r in range(total_num_requests):
         for i in range(model_inputs.input_ids.shape[-1]):
             tokens[r, i] = model_inputs.input_ids[0, i]
@@ -296,18 +296,22 @@ if __name__ == "__main__":
             name="embed_out",
             io_category="cuda_tensor",
         )
-        rmsnorm_out = mpk.new_tensor(
-            dims=(args.max_num_batched_tokens, hidden_size),
-            dtype=mi.bfloat16,
-            name="rmsnorm_out",
-            io_category="cuda_tensor",
-        )
-        attn_in = mpk.new_tensor(
-            dims=(args.max_num_batched_tokens, fused_outdim_1 // world_size), # [6, 6144]
-            dtype=mi.bfloat16,
-            name="attn_in",
-            io_category="cuda_tensor",
-        )
+        rmsnorm_out_torch = torch.empty(args.max_num_batched_tokens, hidden_size, device="cuda", dtype=torch.bfloat16)
+        rmsnorm_out = mpk.attach_input(torch_tensor=rmsnorm_out_torch, name="rmsnorm_out")
+        # rmsnorm_out = mpk.new_tensor(
+        #     dims=(args.max_num_batched_tokens, hidden_size),
+        #     dtype=mi.bfloat16,
+        #     name="rmsnorm_out",
+        #     io_category="cuda_tensor",
+        # )
+        attn_in_torch = torch.empty(args.max_num_batched_tokens, fused_outdim_1 // world_size, device="cuda", dtype=torch.bfloat16)
+        attn_in = mpk.attach_input(torch_tensor=attn_in_torch, name="attn_in")
+        # attn_in = mpk.new_tensor(
+        #     dims=(args.max_num_batched_tokens, fused_outdim_1 // world_size), # [6, 6144]
+        #     dtype=mi.bfloat16,
+        #     name="attn_in",
+        #     io_category="cuda_tensor",
+        # )
         lse = mpk.new_tensor(
             dims=(args.max_num_batched_tokens, num_kv_cache_chunks * num_local_q_heads // num_local_kv_heads, num_local_kv_heads),
             strides=(num_kv_cache_chunks * num_local_q_heads, 1, num_kv_cache_chunks * num_local_q_heads // num_local_kv_heads),
@@ -322,18 +326,24 @@ if __name__ == "__main__":
             name="attn_out_tmp",
             io_category="cuda_tensor",
         )
-        attn_out = mpk.new_tensor(
-            dims=(args.max_num_batched_tokens, num_local_q_heads * head_dim),
-            dtype=mi.bfloat16,
-            name="attn_out",
-            io_category="cuda_tensor",
-        )
-        attn_proj_out = mpk.new_tensor(
-            dims=(args.max_num_batched_tokens, hidden_size),
-            dtype=mi.bfloat16,
-            name="attn_proj_out",
-            io_category="nvshmem_tensor" if world_size > 1 else "cuda_tensor",
-        )
+
+        attn_out_torch = torch.empty(args.max_num_batched_tokens, num_local_q_heads * head_dim, device="cuda", dtype=torch.bfloat16)
+        attn_out = mpk.attach_input(torch_tensor=attn_out_torch, name="attn_out")
+        # attn_out = mpk.new_tensor(
+        #     dims=(args.max_num_batched_tokens, num_local_q_heads * head_dim),
+        #     dtype=mi.bfloat16,
+        #     name="attn_out",
+        #     io_category="cuda_tensor",
+        # )
+
+        attn_proj_out_torch = torch.empty(args.max_num_batched_tokens, hidden_size, device="cuda", dtype=torch.bfloat16)
+        attn_proj_out = mpk.attach_input(torch_tensor=attn_proj_out_torch, name="attn_proj_out")
+        # attn_proj_out = mpk.new_tensor(
+        #     dims=(args.max_num_batched_tokens, hidden_size),
+        #     dtype=mi.bfloat16,
+        #     name="attn_proj_out",
+        #     io_category="nvshmem_tensor" if world_size > 1 else "cuda_tensor",
+        # )
         allreduce_buf = mpk.new_tensor(
             dims=(world_size, args.max_num_batched_tokens, hidden_size),
             dtype=mi.bfloat16,
@@ -358,12 +368,14 @@ if __name__ == "__main__":
             name="silu_mul_out",
             io_category="cuda_tensor",
         )
-        mlp_out = mpk.new_tensor(
-            dims=(args.max_num_batched_tokens, hidden_size),
-            dtype=mi.bfloat16,
-            name="mlp_out",
-            io_category="nvshmem_tensor" if world_size > 1 else "cuda_tensor",
-        )
+        mlp_out_torch = torch.empty(args.max_num_batched_tokens, hidden_size, device="cuda", dtype=torch.bfloat16)
+        mlp_out = mpk.attach_input(torch_tensor=mlp_out_torch, name="mlp_out")
+        # mlp_out = mpk.new_tensor(
+        #     dims=(args.max_num_batched_tokens, hidden_size),
+        #     dtype=mi.bfloat16,
+        #     name="mlp_out",
+        #     io_category="nvshmem_tensor" if world_size > 1 else "cuda_tensor",
+        # )
         mlp_final = mpk.new_tensor(
             dims=(args.max_num_batched_tokens, hidden_size),
             dtype=mi.bfloat16,
@@ -421,6 +433,9 @@ if __name__ == "__main__":
         )
         x = y
         for i, layer in enumerate(model.model.layers):
+            # when i > 2, generate -1
+            if i > 2:
+                break
             # add rmsnorm + linear
             w_norm = mpk.attach_input(
                 torch_tensor=layer.input_layernorm.weight,
@@ -528,7 +543,7 @@ if __name__ == "__main__":
                 input=attn_out,
                 weight=w,
                 output=attn_proj_out,
-                grid_dim=(grid_for_linear_layer(w.dim(0), with_residual=True), 1, 1),
+                grid_dim=(1, 1, 1),
                 block_dim=(256, 1, 1),
             )
             # mpk.linear_with_residual_layer(
@@ -593,22 +608,22 @@ if __name__ == "__main__":
             w = mpk.attach_input(
                 torch_tensor=layer.mlp.down_proj.weight, name=f"layer_{i}_down_proj"
             )
-            mlp_out = x
-            mpk.splitk_linear_layer(
-                input=silu_mul_out,
-                weight=w,
-                output=mlp_out,
-                grid_dim=(grid_for_linear_layer(w.dim(0), with_residual=True), 1, 1),
-                block_dim=(256, 1, 1),
-            )
-            # mpk.linear_with_residual_layer(
+            # mlp_out = x
+            # mpk.splitk_linear_layer(
             #     input=silu_mul_out,
             #     weight=w,
-            #     residual=x,
             #     output=mlp_out,
             #     grid_dim=(grid_for_linear_layer(w.dim(0), with_residual=True), 1, 1),
             #     block_dim=(256, 1, 1),
             # )
+            mpk.linear_with_residual_layer(
+                input=silu_mul_out,
+                weight=w,
+                residual=x,
+                output=mlp_out,
+                grid_dim=(grid_for_linear_layer(w.dim(0), with_residual=True), 1, 1),
+                block_dim=(256, 1, 1),
+            )
             # reset residual input as x
             x = mlp_out
             if world_size > 1:
@@ -744,12 +759,30 @@ if __name__ == "__main__":
         print("tokens.shape = ", tokens.shape)
         for r in range(total_num_requests):
             generated_ids = tokens[r, : step[r] + 1]
-            response = tokenizer.decode(generated_ids, skip_special_tokens=True)
-            print(response)
+        #     response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+        #     print(response)
 
         print("Prompt length {}, generate length {}, per-token latency (both prefill and decode): {:.3f} ms".format(
               prompt_lengths[0], step.max().item() + 1 - prompt_lengths[0], run_time / (step.max().item() + 1)
             )
         )
+
+        print(generated_ids)
+
+        print("first 10 elements of rmsnorm_out_torch:")
+        print(rmsnorm_out_torch[0][:10])
+
+        print("first 10 elements of attn_in_torch:")
+        print(attn_in_torch[0][:10])
+
+        print("first 10 elements of attn_out_torch:")
+        print(attn_out_torch[0][:10])
+
+        print("first 10 elements of attn_proj_out_torch:")
+        print(attn_proj_out_torch[0][:10])
+
+        print("first 10 elements of mlp_out_torch:")
+        print(mlp_out_torch[0][:10])
+        
     if world_size > 1:
         dist.destroy_process_group()

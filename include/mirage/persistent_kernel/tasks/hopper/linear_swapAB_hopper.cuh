@@ -83,7 +83,7 @@ __device__ __forceinline__ void linear_swapAB_kernel_hopper(
   constexpr int NUM_ITER_K = (REDUCTION_SIZE + TILE_SIZE - 1) / TILE_SIZE;
 
   if (threadIdx.x == 0) {
-    printf("blockIdx.x: %d, threadIdx.x: %d, BATCH_SIZE: %d, OUTPUT_SIZE: %d, REDUCTION_SIZE: %d, Kstages: %d, num_iter_n: %d, num_iter_k: %d, tile_size: %d, output_atom_size: %d\n", blockIdx.x, threadIdx.x, BATCH_SIZE, OUTPUT_SIZE, REDUCTION_SIZE, Kstages, NUM_ITER_N, NUM_ITER_K, TILE_SIZE, OUTPUT_ATOM_SIZE);
+    // printf("blockIdx.x: %d, threadIdx.x: %d, BATCH_SIZE: %d, OUTPUT_SIZE: %d, REDUCTION_SIZE: %d, Kstages: %d, num_iter_n: %d, num_iter_k: %d, tile_size: %d, output_atom_size: %d\n", blockIdx.x, threadIdx.x, BATCH_SIZE, OUTPUT_SIZE, REDUCTION_SIZE, Kstages, NUM_ITER_N, NUM_ITER_K, TILE_SIZE, OUTPUT_ATOM_SIZE);
   }
 
   constexpr int B = 3;
